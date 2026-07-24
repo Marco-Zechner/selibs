@@ -43,9 +43,17 @@ SELibs resolves exact transitive dependencies through the central routing
 registry, verifies component checksums, installs source folders, updates
 `selibs.json`, and creates `selibs.lock.json`.
 
-The current vertical slice supports the first package added to a fresh
-manifest. Reconciliation for additional packages, updates, and removals is the
-next stage.
+Additional direct libraries can be added with the same command. SELibs
+re-resolves the complete exact-version dependency graph and installs shared
+dependencies only once.
+
+Remove a direct library with:
+
+    selibs remove Mz.ApiProtocol
+
+Packages no longer reachable from another direct dependency are removed
+automatically and reported. Managed source files are checksum-verified first;
+SELibs refuses to delete locally modified package files.
 
 The mod does not need its own copy of `selibs.ps1` or `selibs.cmd`.
 

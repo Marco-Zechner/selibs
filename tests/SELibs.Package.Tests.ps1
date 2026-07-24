@@ -204,6 +204,17 @@ try {
 
     New-TestPackageRelease `
         -CatalogRoot $catalog `
+        -Id "Test.Second" `
+        -Version "1.0.0" `
+        -Folders @("Test.Second") `
+        -Dependencies @{
+            "Test.Dependency" = "1.0.0"
+        } `
+        -FileText "// second" |
+        Out-Null
+
+    New-TestPackageRelease `
+        -CatalogRoot $catalog `
         -Id "Test.BadHash" `
         -Version "1.0.0" `
         -Folders @("Test.BadHash") `
@@ -234,6 +245,10 @@ try {
                 "Test.Root" = [ordered]@{
                     provider = "filesystem"
                     location = (Join-Path $catalog "Test.Root")
+                }
+                "Test.Second" = [ordered]@{
+                    provider = "filesystem"
+                    location = (Join-Path $catalog "Test.Second")
                 }
                 "Test.BadHash" = [ordered]@{
                     provider = "filesystem"
@@ -356,15 +371,130 @@ try {
         ))) `
         -Message "Transaction files were not cleaned."
 
-    Assert-Throws `
-        -Action {
-            Invoke-SELibsAdd `
-                -ModRoot $modRoot `
-                -PackageSpec "Test.Dependency@1.0.0" `
-                -RegistryUrl $registryPath |
-                Out-Null
-        } `
-        -ExpectedMessagePart "fresh manifest only"
+    $secondOutput = @(
+        Invoke-SELibsAdd `
+            -ModRoot $modRoot `
+            -PackageSpec "Test.Second@1.0.0" `
+            -RegistryUrl $registryPath
+    )
+
+    Assert-True `
+        -Condition ($secondOutput -contains "Added Test.Second 1.0.0.") `
+        -Message "The second direct package was not reported."
+
+    Assert-True `
+        -Condition (Test-Path -LiteralPath (
+            Join-Path $libraries "Test.Second"
+        ) -PathType Container) `
+        -Message "The second direct package was not installed."
+
+    $manifest = Get-Content `
+        -LiteralPath (Join-Path $modRoot "selibs.json") `
+        -Raw |
+        ConvertFrom-Json
+
+    Assert-Equal `
+        -Expected 2 `
+        -Actual @($manifest.dependencies.PSObject.Properties).Count `
+        -Message "The manifest did not retain both direct packages."
+
+    $lock = Get-Content `
+        -LiteralPath (Join-Path $modRoot "selibs.lock.json") `
+        -Raw |
+        ConvertFrom-Json
+
+    Assert-Equal `
+        -Expected 3 `
+        -Actual @($lock.packages.PSObject.Properties).Count `
+        -Message "The reconciled lock did not contain three packages."
+
+    $removeRootOutput = @(
+        Invoke-SELibsRemove `
+            -ModRoot $modRoot `
+            -PackageId "Test.Root"
+    )
+
+    Assert-True `
+        -Condition ($removeRootOutput -contains "Removed Test.Root 2.0.0.") `
+        -Message "Removing the first direct package was not reported."
+
+    foreach ($folder in @("Test.Root.Core", "Test.Root.Game")) {
+        Assert-True `
+            -Condition (-not (Test-Path -LiteralPath (
+                Join-Path $libraries $folder
+            ))) `
+            -Message "Removed package folder '$folder' remains installed."
+    }
+
+    Assert-True `
+        -Condition (Test-Path -LiteralPath (
+            Join-Path $libraries "Test.Dependency"
+        ) -PathType Container) `
+        -Message "A still-required shared dependency was removed."
+
+    Assert-True `
+        -Condition (Test-Path -LiteralPath (
+            Join-Path $libraries "Test.Second"
+        ) -PathType Container) `
+        -Message "The remaining direct package was removed."
+
+    $lockAfterFirstRemove = Get-Content `
+        -LiteralPath (Join-Path $modRoot "selibs.lock.json") `
+        -Raw |
+        ConvertFrom-Json
+
+    Assert-Equal `
+        -Expected 2 `
+        -Actual @($lockAfterFirstRemove.packages.PSObject.Properties).Count `
+        -Message "The first removal produced the wrong lock graph."
+
+    $removeSecondOutput = @(
+        Invoke-SELibsRemove `
+            -ModRoot $modRoot `
+            -PackageId "Test.Second"
+    )
+
+    Assert-True `
+        -Condition (
+            $removeSecondOutput -contains "Removed Test.Second 1.0.0."
+        ) `
+        -Message "Removing the final direct package was not reported."
+
+    Assert-True `
+        -Condition (
+            $removeSecondOutput -contains (
+                "Removed unused dependency Test.Dependency 1.0.0."
+            )
+        ) `
+        -Message "The orphaned dependency was not reported."
+
+    foreach ($folder in @("Test.Second", "Test.Dependency")) {
+        Assert-True `
+            -Condition (-not (Test-Path -LiteralPath (
+                Join-Path $libraries $folder
+            ))) `
+            -Message "Orphaned folder '$folder' remains installed."
+    }
+
+    $emptyManifest = Get-Content `
+        -LiteralPath (Join-Path $modRoot "selibs.json") `
+        -Raw |
+        ConvertFrom-Json
+
+    Assert-Equal `
+        -Expected 0 `
+        -Actual @($emptyManifest.dependencies.PSObject.Properties).Count `
+        -Message "The final direct dependency was not removed."
+
+    $emptyLock = Get-Content `
+        -LiteralPath (Join-Path $modRoot "selibs.lock.json") `
+        -Raw |
+        ConvertFrom-Json
+
+    Assert-Equal `
+        -Expected 0 `
+        -Actual @($emptyLock.packages.PSObject.Properties).Count `
+        -Message "Unused packages remain in the lock."
 
     $badRoot = Join-Path $testRoot "BadHashMod"
 
@@ -419,6 +549,55 @@ try {
                 Out-Null
         } `
         -ExpectedMessagePart "Package 'Missing.Package' was not found"
+
+    $modifiedRoot = Join-Path $testRoot "ModifiedMod"
+
+    New-Item `
+        -ItemType Directory `
+        -Path (Join-Path $modifiedRoot "Data\Scripts\ModifiedMod") `
+        -Force |
+        Out-Null
+
+    Invoke-SELibsInit -ModRoot $modifiedRoot | Out-Null
+
+    Invoke-SELibsAdd `
+        -ModRoot $modifiedRoot `
+        -PackageSpec "Test.Dependency@1.0.0" `
+        -RegistryUrl $registryPath |
+        Out-Null
+
+    $modifiedFile = Join-Path `
+        $modifiedRoot `
+        "Data\Scripts\ModifiedMod\Libraries\Test.Dependency\Test.Dependency.cs"
+
+    [System.IO.File]::AppendAllText(
+        $modifiedFile,
+        "// local edit`n",
+        $script:Utf8NoBom
+    )
+
+    Assert-Throws `
+        -Action {
+            Invoke-SELibsRemove `
+                -ModRoot $modifiedRoot `
+                -PackageId "Test.Dependency" |
+                Out-Null
+        } `
+        -ExpectedMessagePart "has modified file"
+
+    Assert-True `
+        -Condition (Test-Path -LiteralPath $modifiedFile -PathType Leaf) `
+        -Message "A failed safe removal deleted the modified file."
+
+    $modifiedManifest = Get-Content `
+        -LiteralPath (Join-Path $modifiedRoot "selibs.json") `
+        -Raw |
+        ConvertFrom-Json
+
+    Assert-Equal `
+        -Expected "1.0.0" `
+        -Actual ([string]$modifiedManifest.dependencies."Test.Dependency") `
+        -Message "A failed safe removal changed the manifest."
 
     Write-Output (
         "OK SELibs package tests passed: " +
