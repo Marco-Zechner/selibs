@@ -184,7 +184,7 @@ try {
     $ignoreRoot = New-TestModRoot -Name "GitIgnoreMod"
     [System.IO.File]::WriteAllText(
         (Join-Path $ignoreRoot ".gitignore"),
-        "/selibs.ps1`n",
+        "# Existing project ignores`n",
         (New-Object System.Text.UTF8Encoding($false))
     )
 
@@ -201,6 +201,54 @@ try {
         -Expected "/.selibs/" `
         -Actual $recommendations[0] `
         -Message "The missing local-state ignore was not recommended."
+
+    $existingIgnoreRoot = New-TestModRoot -Name "ExistingIgnoreMod"
+    [System.IO.File]::WriteAllText(
+        (Join-Path $existingIgnoreRoot ".gitignore"),
+        "/.selibs/`n",
+        (New-Object System.Text.UTF8Encoding($false))
+    )
+
+    $existingRecommendations = @(
+        Get-SELibsGitIgnoreRecommendations -ModRoot $existingIgnoreRoot
+    )
+
+    Assert-Equal `
+        -Expected 0 `
+        -Actual $existingRecommendations.Count `
+        -Message "An existing SELibs ignore entry was recommended again."
+
+    $cliRoot = New-TestModRoot -Name "GlobalCliMod"
+    New-Item `
+        -ItemType Directory `
+        -Path (Join-Path $cliRoot "Data\Scripts\GlobalCliMod") `
+        -Force |
+        Out-Null
+
+    Push-Location $cliRoot
+
+    try {
+        & (Join-Path $repoRoot "selibs.cmd") init | Out-Null
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "Global SELibs launcher exited with code $LASTEXITCODE."
+        }
+    }
+    finally {
+        Pop-Location
+    }
+
+    Assert-True `
+        -Condition (Test-Path -LiteralPath (
+            Join-Path $cliRoot "selibs.json"
+        )) `
+        -Message "The global launcher did not initialize the current mod."
+
+    Assert-True `
+        -Condition (-not (Test-Path -LiteralPath (
+            Join-Path $cliRoot "selibs.ps1"
+        ))) `
+        -Message "The global launcher copied itself into the mod."
 
     $idempotentRoot = New-TestModRoot -Name "IdempotentMod"
     Invoke-SELibsInit -ModRoot $idempotentRoot | Out-Null

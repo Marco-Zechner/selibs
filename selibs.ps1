@@ -14,7 +14,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$script:SELibsEntryScriptName = Split-Path -Leaf $PSCommandPath
+
 
 function Write-SELibsUtf8NoBom {
     [CmdletBinding()]
@@ -228,7 +228,7 @@ function Get-SELibsGitIgnoreRecommendations {
 
     $recommendations = @()
 
-    foreach ($entry in @("/selibs.ps1", "/.selibs/")) {
+    foreach ($entry in @("/.selibs/")) {
         $normalizedEntry = $entry.TrimStart("/")
 
         if ($existingEntries -notcontains $normalizedEntry) {
@@ -329,9 +329,9 @@ function Show-SELibsHelp {
     Write-Output "SELibs - source-library manager for Space Engineers mods"
     Write-Output ""
     Write-Output "Usage:"
-    Write-Output "  .\selibs.ps1 init"
+    Write-Output "  selibs init"
     Write-Output (
-        "  .\selibs.ps1 init -LibrariesPath " +
+        "  selibs init -LibrariesPath " +
         '"Data/Scripts/MyMod/Libraries"'
     )
     Write-Output ""
