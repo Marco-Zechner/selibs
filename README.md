@@ -1,34 +1,55 @@
 # SELibs
 
-SELibs is a source-library manager and package-routing registry for
+SELibs is a global source-library manager and package-routing registry for
 Space Engineers mods.
 
-The initial executable slice provides a single Windows PowerShell 5.1
-compatible script that initializes a mod for future package management.
+Install SELibs once, add its installation directory to `PATH`, and run it from
+the root directory of any mod:
+
+    selibs init
+
+The `selibs.cmd` launcher invokes the Windows PowerShell 5.1-compatible
+`selibs.ps1` implementation, so the command works from `cmd.exe` and
+PowerShell without copying the manager into every mod.
 
 ## Mod setup
 
-Copy `selibs.ps1` to the mod root and run:
+From the mod root, run:
 
-    .\selibs.ps1 init
+    selibs init
 
 SELibs will:
 
 - create `selibs.json`;
-- create `.selibs/` for local manager state;
+- create `.selibs/` for local cache and installation state;
 - detect the sole folder below `Data/Scripts`, when one exists;
 - otherwise use `Data/Scripts/<mod-root-name>/Libraries`;
 - require an explicit path when several script folders exist;
-- suggest missing `.gitignore` entries without changing the file.
+- suggest `/.selibs/` for an existing `.gitignore` without editing it.
 
-An explicit path can be selected with:
+An explicit destination can be selected with:
 
-    .\selibs.ps1 init `
+    selibs init `
         -LibrariesPath "Data/Scripts/MyMod/Libraries"
 
-The configured destination must be inside the mod and end in `Libraries`.
+The configured destination must be inside the current mod and end in
+`Libraries`.
 
-## Current manifest
+The mod does not need its own copy of `selibs.ps1` or `selibs.cmd`.
+
+## Files stored in a mod
+
+The intended project-local files are:
+
+    selibs.json
+    selibs.lock.json
+    .selibs/
+
+`selibs.json` and `selibs.lock.json` are intended to be committed.
+`.selibs/` contains local cache and file-ownership state and should normally
+be ignored.
+
+The current manifest format is:
 
     {
       "schemaVersion": 1,
@@ -36,14 +57,11 @@ The configured destination must be inside the mod and end in `Libraries`.
       "dependencies": {}
     }
 
-`selibs.json` is intended to be committed. Local cache and installation state
-will live under `.selibs/`.
-
 ## Development
 
 Run the focused verification suite with:
 
     .\scripts\verify.ps1
 
-The test suite uses Windows PowerShell directly and has no external
+The tests execute under Windows PowerShell 5.1 and have no external
 dependencies.
