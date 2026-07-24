@@ -3,7 +3,8 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $tests = @(
     "tests\SELibs.Tests.ps1",
-    "tests\SELibs.Package.Tests.ps1"
+    "tests\SELibs.Package.Tests.ps1",
+    "tests\SELibs.Install.Tests.ps1"
 )
 
 foreach ($relativePath in $tests) {

@@ -3,10 +3,26 @@
 SELibs is a global source-library manager and package-routing registry for
 Space Engineers mods.
 
-Install SELibs once, add its installation directory to `PATH`, and run it from
-the root directory of any mod:
+Install SELibs for the current Windows user from a downloaded or cloned release:
+
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+
+The installer copies the runtime to `%LOCALAPPDATA%\SELibs`, adds
+`%LOCALAPPDATA%\SELibs\bin` to the user `PATH`, and can be run again to replace
+an existing managed installation. Open a new terminal after installation, then
+run SELibs from the root directory of any mod:
 
     selibs init
+
+A custom installation directory can be selected with `-InstallRoot`.
+
+Uninstall the default installation with:
+
+    powershell.exe -NoProfile -ExecutionPolicy Bypass `
+        -File "$env:LOCALAPPDATA\SELibs\uninstall.ps1"
+
+The installer and uninstaller refuse to replace or remove a non-SELibs
+directory. Unrelated user `PATH` entries are preserved.
 
 The `selibs.cmd` launcher invokes the Windows PowerShell 5.1-compatible
 `selibs.ps1` implementation, so the command works from `cmd.exe` and
