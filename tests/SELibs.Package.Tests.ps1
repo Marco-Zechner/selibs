@@ -193,6 +193,15 @@ try {
 
     New-TestPackageRelease `
         -CatalogRoot $catalog `
+        -Id "Test.Dependency" `
+        -Version "2.0.0" `
+        -Folders @("Test.Dependency") `
+        -Dependencies @{} `
+        -FileText "// dependency v2" |
+        Out-Null
+
+    New-TestPackageRelease `
+        -CatalogRoot $catalog `
         -Id "Test.Root" `
         -Version "2.0.0" `
         -Folders @("Test.Root.Core", "Test.Root.Game") `
@@ -200,6 +209,17 @@ try {
             "Test.Dependency" = "1.0.0"
         } `
         -FileText "// root" |
+        Out-Null
+
+    New-TestPackageRelease `
+        -CatalogRoot $catalog `
+        -Id "Test.Root" `
+        -Version "3.0.0" `
+        -Folders @("Test.Root.Core", "Test.Root.Game") `
+        -Dependencies @{
+            "Test.Dependency" = "2.0.0"
+        } `
+        -FileText "// root v3" |
         Out-Null
 
     New-TestPackageRelease `
@@ -495,6 +515,137 @@ try {
         -Expected 0 `
         -Actual @($emptyLock.packages.PSObject.Properties).Count `
         -Message "Unused packages remain in the lock."
+
+    $updateRoot = Join-Path $testRoot "UpdateMod"
+
+    New-Item `
+        -ItemType Directory `
+        -Path (Join-Path $updateRoot "Data\Scripts\UpdateMod") `
+        -Force |
+        Out-Null
+
+    Invoke-SELibsInit -ModRoot $updateRoot | Out-Null
+
+    Invoke-SELibsAdd `
+        -ModRoot $updateRoot `
+        -PackageSpec "Test.Root@2.0.0" `
+        -RegistryUrl $registryPath |
+        Out-Null
+
+    $updateOutput = @(
+        Invoke-SELibsUpdate `
+            -ModRoot $updateRoot `
+            -PackageSpec "Test.Root" `
+            -RegistryUrl $registryPath
+    )
+
+    Assert-True `
+        -Condition (
+            $updateOutput -contains "Updated Test.Root 2.0.0 -> 3.0.0."
+        ) `
+        -Message "Updating to the latest stable release was not reported."
+
+    $updatedLibraries = Join-Path `
+        $updateRoot `
+        "Data\Scripts\UpdateMod\Libraries"
+
+    Assert-Equal `
+        -Expected "// root v3`n" `
+        -Actual ([System.IO.File]::ReadAllText(
+            (Join-Path $updatedLibraries "Test.Root.Core\Test.Root.Core.cs")
+        )) `
+        -Message "The root package source was not updated."
+
+    Assert-Equal `
+        -Expected "// dependency v2`n" `
+        -Actual ([System.IO.File]::ReadAllText(
+            (Join-Path `
+                $updatedLibraries `
+                "Test.Dependency\Test.Dependency.cs")
+        )) `
+        -Message "The transitive dependency source was not updated."
+
+    $updatedManifest = Get-Content `
+        -LiteralPath (Join-Path $updateRoot "selibs.json") `
+        -Raw |
+        ConvertFrom-Json
+
+    Assert-Equal `
+        -Expected "3.0.0" `
+        -Actual ([string]$updatedManifest.dependencies."Test.Root") `
+        -Message "The updated direct version was not written to the manifest."
+
+    $updatedLock = Get-Content `
+        -LiteralPath (Join-Path $updateRoot "selibs.lock.json") `
+        -Raw |
+        ConvertFrom-Json
+
+    Assert-Equal `
+        -Expected "3.0.0" `
+        -Actual ([string]$updatedLock.packages."Test.Root".version) `
+        -Message "The updated root version was not locked."
+
+    Assert-Equal `
+        -Expected "2.0.0" `
+        -Actual ([string]$updatedLock.packages."Test.Dependency".version) `
+        -Message "The updated dependency version was not locked."
+
+    $updateModifiedRoot = Join-Path $testRoot "UpdateModifiedMod"
+
+    New-Item `
+        -ItemType Directory `
+        -Path (Join-Path `
+            $updateModifiedRoot `
+            "Data\Scripts\UpdateModifiedMod") `
+        -Force |
+        Out-Null
+
+    Invoke-SELibsInit -ModRoot $updateModifiedRoot | Out-Null
+
+    Invoke-SELibsAdd `
+        -ModRoot $updateModifiedRoot `
+        -PackageSpec "Test.Root@2.0.0" `
+        -RegistryUrl $registryPath |
+        Out-Null
+
+    $updateModifiedFile = Join-Path `
+        $updateModifiedRoot `
+        "Data\Scripts\UpdateModifiedMod\Libraries\Test.Root.Core\Test.Root.Core.cs"
+
+    [System.IO.File]::AppendAllText(
+        $updateModifiedFile,
+        "// local update edit`n",
+        $script:Utf8NoBom
+    )
+
+    Assert-Throws `
+        -Action {
+            Invoke-SELibsUpdate `
+                -ModRoot $updateModifiedRoot `
+                -PackageSpec "Test.Root@3.0.0" `
+                -RegistryUrl $registryPath |
+                Out-Null
+        } `
+        -ExpectedMessagePart "has modified file"
+
+    $unchangedUpdateManifest = Get-Content `
+        -LiteralPath (Join-Path $updateModifiedRoot "selibs.json") `
+        -Raw |
+        ConvertFrom-Json
+
+    Assert-Equal `
+        -Expected "2.0.0" `
+        -Actual (
+            [string]$unchangedUpdateManifest.dependencies."Test.Root"
+        ) `
+        -Message "A rejected update changed the manifest version."
+
+    Assert-True `
+        -Condition (
+            [System.IO.File]::ReadAllText($updateModifiedFile) -like
+            "*// local update edit*"
+        ) `
+        -Message "A rejected update lost the local source modification."
 
     $badRoot = Join-Path $testRoot "BadHashMod"
 

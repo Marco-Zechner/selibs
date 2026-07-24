@@ -51,9 +51,21 @@ Remove a direct library with:
 
     selibs remove Mz.ApiProtocol
 
+Update a direct library to its newest stable release with:
+
+    selibs update Mz.ApiProtocol
+
+Or select an exact release:
+
+    selibs update Mz.ApiProtocol@0.3.0
+
+The complete graph is resolved again, so transitive dependencies are upgraded,
+installed, or removed as required.
+
 Packages no longer reachable from another direct dependency are removed
-automatically and reported. Managed source files are checksum-verified first;
-SELibs refuses to delete locally modified package files.
+automatically and reported. Managed source files are checksum-verified before
+updates and removals; SELibs refuses to replace or delete locally modified
+package files.
 
 The mod does not need its own copy of `selibs.ps1` or `selibs.cmd`.
 
