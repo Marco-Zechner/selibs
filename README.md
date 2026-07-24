@@ -35,6 +35,18 @@ An explicit destination can be selected with:
 The configured destination must be inside the current mod and end in
 `Libraries`.
 
+Install the first direct library with an exact version:
+
+    selibs add Mz.ApiProtocol@0.2.0
+
+SELibs resolves exact transitive dependencies through the central routing
+registry, verifies component checksums, installs source folders, updates
+`selibs.json`, and creates `selibs.lock.json`.
+
+The current vertical slice supports the first package added to a fresh
+manifest. Reconciliation for additional packages, updates, and removals is the
+next stage.
+
 The mod does not need its own copy of `selibs.ps1` or `selibs.cmd`.
 
 ## Files stored in a mod
@@ -65,3 +77,6 @@ Run the focused verification suite with:
 
 The tests execute under Windows PowerShell 5.1 and have no external
 dependencies.
+
+Package publishing conventions are documented in
+[`docs/package-format.md`](docs/package-format.md).

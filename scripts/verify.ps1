@@ -1,13 +1,23 @@
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$tests = Join-Path $repoRoot "tests\SELibs.Tests.ps1"
+$tests = @(
+    "tests\SELibs.Tests.ps1",
+    "tests\SELibs.Package.Tests.ps1"
+)
 
-& powershell.exe `
-    -NoProfile `
-    -ExecutionPolicy Bypass `
-    -File $tests
+foreach ($relativePath in $tests) {
+    $testPath = Join-Path $repoRoot $relativePath
 
-if ($LASTEXITCODE -ne 0) {
-    throw "SELibs tests failed with exit code $LASTEXITCODE."
+    & powershell.exe `
+        -NoProfile `
+        -ExecutionPolicy Bypass `
+        -File $testPath
+
+    if ($LASTEXITCODE -ne 0) {
+        throw (
+            "SELibs test '$relativePath' failed with " +
+            "exit code $LASTEXITCODE."
+        )
+    }
 }

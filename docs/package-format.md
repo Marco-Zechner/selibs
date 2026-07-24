@@ -1,0 +1,57 @@
+# SELibs package format
+
+The central registry routes a package ID to its publishing location. It does
+not list package versions or dependencies.
+
+## Central routing entry
+
+A GitHub-hosted package uses:
+
+    {
+      "provider": "github",
+      "repository": "Author/repository",
+      "releasePrefix": "library-name-v"
+    }
+
+For example, version `2.1.0` is discovered from the release tag
+`library-name-v2.1.0`.
+
+The `filesystem` provider exists for deterministic local testing.
+
+## Release assets
+
+A release contains:
+
+    Package.Id-2.1.0-package.json
+    Package.Id-2.1.0-component.zip
+
+The package manifest contains:
+
+    {
+      "schemaVersion": 1,
+      "id": "Package.Id",
+      "version": "2.1.0",
+      "dependencies": {
+        "Other.Library": "1.0.0"
+      },
+      "folders": [
+        "Package.Id.Core",
+        "Package.Id.SpaceEngineers"
+      ],
+      "component": {
+        "asset": "Package.Id-2.1.0-component.zip",
+        "sha256": "<64 lowercase hexadecimal characters>"
+      }
+    }
+
+Dependency versions are exact in the initial implementation.
+
+The component archive contains only its own source folders beneath one
+`Libraries` root:
+
+    Libraries/
+      Package.Id.Core/
+      Package.Id.SpaceEngineers/
+
+SELibs rejects archive entries outside `Libraries`, path traversal, undeclared
+folders, folder collisions, and checksum mismatches.

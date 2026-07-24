@@ -1,12 +1,17 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("help", "init")]
+    [ValidateSet("help", "init", "add")]
     [string]$Command = "help",
+
+    [Parameter(Position = 1)]
+    [string]$PackageSpec,
 
     [string]$ModRoot = (Get-Location).Path,
 
     [string]$LibrariesPath,
+
+    [string]$RegistryUrl,
 
     [switch]$Force
 )
@@ -14,7 +19,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-
+$script:SELibsRoot = Split-Path -Parent $PSCommandPath
 
 function Write-SELibsUtf8NoBom {
     [CmdletBinding()]
@@ -325,6 +330,8 @@ function Invoke-SELibsInit {
     Show-SELibsGitIgnoreRecommendations -ModRoot $root
 }
 
+. (Join-Path $script:SELibsRoot "lib\SELibs.Package.ps1")
+
 function Show-SELibsHelp {
     Write-Output "SELibs - source-library manager for Space Engineers mods"
     Write-Output ""
@@ -334,9 +341,11 @@ function Show-SELibsHelp {
         "  selibs init -LibrariesPath " +
         '"Data/Scripts/MyMod/Libraries"'
     )
+    Write-Output "  selibs add Mz.ApiProtocol@0.2.0"
     Write-Output ""
     Write-Output "Commands:"
     Write-Output "  init   Create selibs.json and the Libraries directory."
+    Write-Output "  add    Resolve and install a library and its dependencies."
     Write-Output "  help   Show this help."
 }
 
@@ -347,6 +356,17 @@ if ($MyInvocation.InvocationName -ne ".") {
                 -ModRoot $ModRoot `
                 -LibrariesPath $LibrariesPath `
                 -Force:$Force
+        }
+
+        "add" {
+            if ([string]::IsNullOrWhiteSpace($PackageSpec)) {
+                throw "The add command requires a package ID or ID@version."
+            }
+
+            Invoke-SELibsAdd `
+                -ModRoot $ModRoot `
+                -PackageSpec $PackageSpec `
+                -RegistryUrl $RegistryUrl
         }
 
         "help" {
