@@ -65,3 +65,13 @@ version conflicts, and installs only packages not already present in the lock.
 that are no longer reachable from another direct dependency. Before deleting
 owned folders, SELibs verifies that the recorded files have not been added,
 removed, or modified.
+
+## Updates
+
+`selibs update Package.Id` selects the newest stable numeric release exposed by
+the package route. `selibs update Package.Id@2.1.0` selects an exact release.
+
+The complete direct and transitive graph is resolved before any installed
+folder changes. Existing managed files are checksum-verified, changed packages
+are staged, and folder swaps plus manifest and lock updates are rolled back
+together if the transaction fails.

@@ -1888,3 +1888,412 @@ function Invoke-SELibsRemove {
             -TransactionRoot $transactionRoot
     }
 }
+
+function Invoke-SELibsUpdate {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ModRoot,
+
+        [Parameter(Mandatory = $true)]
+        [string]$PackageSpec,
+
+        [string]$RegistryUrl
+    )
+
+    $root = Get-SELibsFullModRoot -ModRoot $ModRoot
+    $manifestPath = Join-Path $root "selibs.json"
+    $lockPath = Join-Path $root "selibs.lock.json"
+    $statePath = Join-Path $root ".selibs"
+
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        throw "This mod is not initialized. Run 'selibs init' first."
+    }
+
+    if (-not (Test-Path -LiteralPath $lockPath -PathType Leaf)) {
+        throw "selibs.lock.json is missing."
+    }
+
+    $manifest = Read-SELibsManifest -Path $manifestPath
+    $lock = Read-SELibsLock -Path $lockPath
+    $requested = ConvertFrom-SELibsPackageSpec `
+        -PackageSpec $PackageSpec
+
+    $directProperty = Get-SELibsObjectProperty `
+        -Object $manifest.dependencies `
+        -Name $requested.Id
+
+    if ($null -eq $directProperty) {
+        throw "Package '$($requested.Id)' is not a direct dependency."
+    }
+
+    $canonicalId = $directProperty.Name
+    $oldDirectVersion = [string]$directProperty.Value
+    $directDependencies = ConvertTo-SELibsDependencyMap `
+        -Dependencies $manifest.dependencies
+
+    $directDependencies[$canonicalId] = $requested.Version
+
+    $effectiveRegistryUrl = $RegistryUrl
+
+    if ([string]::IsNullOrWhiteSpace($effectiveRegistryUrl)) {
+        $effectiveRegistryUrl = [string]$lock.registry
+    }
+
+    $registry = Read-SELibsRegistry `
+        -RegistryUrl $effectiveRegistryUrl
+
+    $descriptors = @(
+        Resolve-SELibsProjectGraph `
+            -Registry $registry `
+            -DirectDependencies $directDependencies
+    )
+
+    Test-SELibsFolderClaims -Descriptors $descriptors
+
+    $descriptorById = @{}
+
+    foreach ($descriptor in $descriptors) {
+        $descriptorById[$descriptor.Id] = $descriptor
+    }
+
+    $updatedDescriptor = $descriptorById[$canonicalId]
+
+    if ($null -eq $updatedDescriptor) {
+        throw "Resolved graph did not contain '$canonicalId'."
+    }
+
+    $finalDirectDependencies = [ordered]@{}
+
+    foreach ($directId in @($directDependencies.Keys | Sort-Object)) {
+        $descriptor = $descriptorById[$directId]
+
+        if ($null -eq $descriptor) {
+            throw "Resolved graph did not contain direct package '$directId'."
+        }
+
+        $finalDirectDependencies[$descriptor.Id] = $descriptor.Version
+    }
+
+    $existingProperties = @{}
+
+    foreach ($property in $lock.packages.PSObject.Properties) {
+        $existingProperties[$property.Name] = $property
+    }
+
+    $resolvedLibraries = Resolve-SELibsLibrariesPath `
+        -ModRoot $root `
+        -LibrariesPath ([string]$manifest.librariesPath)
+
+    foreach ($property in $lock.packages.PSObject.Properties) {
+        Test-SELibsManagedPackage `
+            -LibrariesRoot $resolvedLibraries.FullPath `
+            -PackageId $property.Name `
+            -LockEntry $property.Value
+    }
+
+    $changedIds = @{}
+    $removedProperties = New-Object System.Collections.ArrayList
+
+    foreach ($descriptor in $descriptors) {
+        $existingProperty = Get-SELibsObjectProperty `
+            -Object $lock.packages `
+            -Name $descriptor.Id
+
+        if (
+            $null -eq $existingProperty -or
+            [string]$existingProperty.Value.version -ne $descriptor.Version
+        ) {
+            $changedIds[$descriptor.Id] = $true
+        }
+    }
+
+    foreach ($property in $lock.packages.PSObject.Properties) {
+        if (-not $descriptorById.ContainsKey($property.Name)) {
+            [void]$removedProperties.Add($property)
+        }
+    }
+
+    if (
+        $changedIds.Count -eq 0 -and
+        $removedProperties.Count -eq 0 -and
+        $updatedDescriptor.Version -eq $oldDirectVersion
+    ) {
+        Write-Output (
+            "$canonicalId is already at version " +
+            "$($updatedDescriptor.Version)."
+        )
+
+        return
+    }
+
+    $replaceableFolders = @{}
+
+    foreach ($property in $lock.packages.PSObject.Properties) {
+        if (
+            $changedIds.ContainsKey($property.Name) -or
+            -not $descriptorById.ContainsKey($property.Name)
+        ) {
+            foreach ($folderValue in @($property.Value.folders)) {
+                $replaceableFolders[[string]$folderValue] = $true
+            }
+        }
+    }
+
+    New-Item -ItemType Directory -Path $statePath -Force | Out-Null
+
+    $transactionRoot = Join-Path `
+        $statePath `
+        ("tmp\update-" + [Guid]::NewGuid().ToString("N"))
+
+    $backupLibraries = Join-Path $transactionRoot "backup\Libraries"
+    $movedFolders = New-Object System.Collections.ArrayList
+    $createdTargets = New-Object System.Collections.ArrayList
+    $stagedPackages = @{}
+    $oldManifestContent = Get-Content -LiteralPath $manifestPath -Raw
+    $oldLockContent = Get-Content -LiteralPath $lockPath -Raw
+
+    try {
+        foreach ($descriptor in $descriptors) {
+            if (-not $changedIds.ContainsKey($descriptor.Id)) {
+                continue
+            }
+
+            $packageRoot = Join-Path `
+                $transactionRoot `
+                ("packages\" + $descriptor.Id)
+
+            $archivePath = Join-Path $packageRoot "component.zip"
+            $extractPath = Join-Path $packageRoot "extract"
+
+            Copy-SELibsResource `
+                -Source $descriptor.ComponentSource `
+                -Destination $archivePath
+
+            $actualHash = (
+                Get-FileHash `
+                    -LiteralPath $archivePath `
+                    -Algorithm SHA256
+            ).Hash.ToLowerInvariant()
+
+            if ($actualHash -ne $descriptor.ComponentSha256) {
+                throw (
+                    "Component checksum mismatch for " +
+                    "'$($descriptor.Id)@$($descriptor.Version)'."
+                )
+            }
+
+            Expand-SELibsComponentArchive `
+                -ArchivePath $archivePath `
+                -Destination $extractPath
+
+            $extractedLibraries = Join-Path $extractPath "Libraries"
+
+            foreach ($folderValue in $descriptor.Folders) {
+                $folder = [string]$folderValue
+                $sourceFolder = Join-Path $extractedLibraries $folder
+                $targetFolder = Join-Path $resolvedLibraries.FullPath $folder
+
+                if (
+                    -not (
+                        Test-Path `
+                            -LiteralPath $sourceFolder `
+                            -PathType Container
+                    )
+                ) {
+                    throw (
+                        "Package '$($descriptor.Id)' does not contain " +
+                        "declared folder '$folder'."
+                    )
+                }
+
+                if (
+                    (Test-Path -LiteralPath $targetFolder) -and
+                    -not $replaceableFolders.ContainsKey($folder)
+                ) {
+                    throw (
+                        "Refusing to overwrite existing Libraries folder " +
+                        "'$folder'."
+                    )
+                }
+            }
+
+            $stagedPackages[$descriptor.Id] = $extractedLibraries
+        }
+
+        foreach ($property in $lock.packages.PSObject.Properties) {
+            if (
+                -not $changedIds.ContainsKey($property.Name) -and
+                $descriptorById.ContainsKey($property.Name)
+            ) {
+                continue
+            }
+
+            foreach ($folderValue in @($property.Value.folders)) {
+                $folder = [string]$folderValue
+                $source = Join-Path $resolvedLibraries.FullPath $folder
+                $destination = Join-Path $backupLibraries $folder
+                $destinationParent = Split-Path -Parent $destination
+
+                New-Item `
+                    -ItemType Directory `
+                    -Path $destinationParent `
+                    -Force |
+                    Out-Null
+
+                Move-Item `
+                    -LiteralPath $source `
+                    -Destination $destination
+
+                [void]$movedFolders.Add([pscustomobject]@{
+                    Source = $destination
+                    Destination = $source
+                })
+            }
+        }
+
+        foreach ($descriptor in $descriptors) {
+            if (-not $changedIds.ContainsKey($descriptor.Id)) {
+                continue
+            }
+
+            $stagedLibraries = $stagedPackages[$descriptor.Id]
+
+            foreach ($folderValue in $descriptor.Folders) {
+                $folder = [string]$folderValue
+                $source = Join-Path $stagedLibraries $folder
+                $target = Join-Path $resolvedLibraries.FullPath $folder
+
+                [void]$createdTargets.Add($target)
+
+                Copy-Item `
+                    -LiteralPath $source `
+                    -Destination $target `
+                    -Recurse
+            }
+        }
+
+        $lockEntries = [ordered]@{}
+
+        foreach ($descriptor in $descriptors) {
+            $lockEntries[$descriptor.Id] = New-SELibsLockEntry `
+                -Descriptor $descriptor `
+                -Direct:$finalDirectDependencies.Contains($descriptor.Id) `
+                -Files (Get-SELibsFolderFiles `
+                    -LibrariesRoot $resolvedLibraries.FullPath `
+                    -Folders $descriptor.Folders)
+        }
+
+        $newManifest = [ordered]@{
+            schemaVersion = 1
+            librariesPath = $resolvedLibraries.RelativePath
+            dependencies = $finalDirectDependencies
+        }
+
+        $newLock = [ordered]@{
+            schemaVersion = 1
+            registry = $registry.Source
+            packages = $lockEntries
+        }
+
+        try {
+            Write-SELibsJsonAtomic -Path $lockPath -Value $newLock
+            Write-SELibsJsonAtomic -Path $manifestPath -Value $newManifest
+        }
+        catch {
+            Restore-SELibsProjectFile `
+                -Path $manifestPath `
+                -OriginalContent $oldManifestContent
+
+            Restore-SELibsProjectFile `
+                -Path $lockPath `
+                -OriginalContent $oldLockContent
+
+            throw
+        }
+
+        Write-Output (
+            "Updated $canonicalId $oldDirectVersion -> " +
+            "$($updatedDescriptor.Version)."
+        )
+
+        foreach ($descriptor in $descriptors) {
+            if ($descriptor.Id -eq $canonicalId) {
+                continue
+            }
+
+            $existingProperty = Get-SELibsObjectProperty `
+                -Object $lock.packages `
+                -Name $descriptor.Id
+
+            if ($null -eq $existingProperty) {
+                Write-Output (
+                    "Installed dependency " +
+                    "$($descriptor.Id) $($descriptor.Version)."
+                )
+            }
+            elseif (
+                [string]$existingProperty.Value.version -ne
+                $descriptor.Version
+            ) {
+                Write-Output (
+                    "Updated dependency $($descriptor.Id) " +
+                    "$($existingProperty.Value.version) -> " +
+                    "$($descriptor.Version)."
+                )
+            }
+        }
+
+        foreach ($property in $removedProperties) {
+            Write-Output (
+                "Removed unused dependency " +
+                "$($property.Name) $($property.Value.version)."
+            )
+        }
+    }
+    catch {
+        foreach ($target in $createdTargets) {
+            if (Test-Path -LiteralPath $target) {
+                Remove-Item -LiteralPath $target -Recurse -Force
+            }
+        }
+
+        for (
+            $index = $movedFolders.Count - 1;
+            $index -ge 0;
+            $index--
+        ) {
+            $moved = $movedFolders[$index]
+
+            if (Test-Path -LiteralPath $moved.Source) {
+                $parent = Split-Path -Parent $moved.Destination
+                New-Item -ItemType Directory -Path $parent -Force | Out-Null
+
+                Move-Item `
+                    -LiteralPath $moved.Source `
+                    -Destination $moved.Destination
+            }
+        }
+
+        Restore-SELibsProjectFile `
+            -Path $manifestPath `
+            -OriginalContent $oldManifestContent
+
+        Restore-SELibsProjectFile `
+            -Path $lockPath `
+            -OriginalContent $oldLockContent
+
+        throw
+    }
+    finally {
+        if (Test-Path -LiteralPath $transactionRoot) {
+            Remove-Item `
+                -LiteralPath $transactionRoot `
+                -Recurse `
+                -Force
+        }
+
+        Remove-SELibsEmptyTransactionParent `
+            -TransactionRoot $transactionRoot
+    }
+}
