@@ -55,3 +55,13 @@ The component archive contains only its own source folders beneath one
 
 SELibs rejects archive entries outside `Libraries`, path traversal, undeclared
 folders, folder collisions, and checksum mismatches.
+
+## Project reconciliation
+
+`selibs add` resolves every direct dependency in `selibs.json`, detects exact
+version conflicts, and installs only packages not already present in the lock.
+
+`selibs remove` removes the selected direct dependency and all locked packages
+that are no longer reachable from another direct dependency. Before deleting
+owned folders, SELibs verifies that the recorded files have not been added,
+removed, or modified.
