@@ -95,6 +95,24 @@ function Write-TestJson {
     )
 }
 
+$byteJson = [System.Text.Encoding]::UTF8.GetBytes(
+    '{"schemaVersion":1,"id":"Byte.Package"}'
+)
+
+$byteJsonResult = ConvertFrom-SELibsJsonContent `
+    -Content $byteJson `
+    -Source "byte-content-test"
+
+Assert-Equal `
+    -Expected 1 `
+    -Actual $byteJsonResult.schemaVersion `
+    -Message "Byte-backed JSON should preserve schemaVersion."
+
+Assert-Equal `
+    -Expected "Byte.Package" `
+    -Actual $byteJsonResult.id `
+    -Message "Byte-backed JSON should decode as UTF-8."
+
 function New-TestPackageRelease {
     param(
         [Parameter(Mandatory = $true)]
