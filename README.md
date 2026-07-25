@@ -63,6 +63,16 @@ Additional direct libraries can be added with the same command. SELibs
 re-resolves the complete exact-version dependency graph and installs shared
 dependencies only once.
 
+Inspect the installed graph and check for newer stable releases with:
+
+    selibs status
+
+The status command is read-only. It reports each direct and transitive package,
+its installed version, the newest stable release currently exposed by the
+registry, and whether its checksum-managed files were modified. A newer
+transitive release is informational; updating a direct package still
+re-resolves the complete compatible graph.
+
 Remove a direct library with:
 
     selibs remove Mz.ApiProtocol

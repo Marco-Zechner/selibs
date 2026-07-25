@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("help", "init", "add", "update", "remove")]
+    [ValidateSet("help", "init", "add", "status", "update", "remove")]
     [string]$Command = "help",
 
     [Parameter(Position = 1)]
@@ -343,6 +343,7 @@ function Show-SELibsHelp {
         '"Data/Scripts/MyMod/Libraries"'
     )
     Write-Output "  selibs add Mz.ApiProtocol@0.2.0"
+    Write-Output "  selibs status"
     Write-Output "  selibs update Mz.ApiProtocol"
     Write-Output "  selibs update Mz.ApiProtocol@0.3.0"
     Write-Output "  selibs remove Mz.ApiProtocol"
@@ -350,6 +351,7 @@ function Show-SELibsHelp {
     Write-Output "Commands:"
     Write-Output "  init   Create selibs.json and the Libraries directory."
     Write-Output "  add     Add a direct library and reconcile dependencies."
+    Write-Output "  status  Show installed, latest, and modified package state."
     Write-Output "  update  Update a direct library and its dependency graph."
     Write-Output "  remove  Remove a direct library and unused dependencies."
     Write-Output "  help    Show this help."
@@ -372,6 +374,12 @@ if ($MyInvocation.InvocationName -ne ".") {
             Invoke-SELibsAdd `
                 -ModRoot $ModRoot `
                 -PackageSpec $PackageSpec `
+                -RegistryUrl $RegistryUrl
+        }
+
+        "status" {
+            Invoke-SELibsStatus `
+                -ModRoot $ModRoot `
                 -RegistryUrl $RegistryUrl
         }
 
