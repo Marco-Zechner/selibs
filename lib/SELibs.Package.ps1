@@ -408,9 +408,15 @@ function Get-SELibsGitHubRelease {
     $apiRoot = "https://api.github.com/repos/$repository"
 
     if ([string]::IsNullOrWhiteSpace($RequestedVersion)) {
+        $releaseResponse = Invoke-SELibsGitHubApi `
+            -Uri "$apiRoot/releases?per_page=100"
+
+        # Windows PowerShell 5.1 can preserve a top-level JSON array as one
+        # nested pipeline object. Sending the result through the pipeline
+        # explicitly enumerates either response shape.
         $releases = @(
-            Invoke-SELibsGitHubApi `
-                -Uri "$apiRoot/releases?per_page=100"
+            $releaseResponse |
+                ForEach-Object { $_ }
         )
 
         $candidates = @()
@@ -1338,6 +1344,134 @@ function Remove-SELibsEmptyTransactionParent {
     }
 }
 
+function Invoke-SELibsStatus {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ModRoot,
+
+        [string]$RegistryUrl
+    )
+
+    $root = Get-SELibsFullModRoot -ModRoot $ModRoot
+    $manifestPath = Join-Path $root "selibs.json"
+    $lockPath = Join-Path $root "selibs.lock.json"
+
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        throw "This mod is not initialized. Run 'selibs init' first."
+    }
+
+    $manifest = Read-SELibsManifest -Path $manifestPath
+    $directDependencies = ConvertTo-SELibsDependencyMap `
+        -Dependencies $manifest.dependencies
+
+    if (-not (Test-Path -LiteralPath $lockPath -PathType Leaf)) {
+        if ($directDependencies.Count -eq 0) {
+            Write-Output "No packages are installed."
+            return
+        }
+
+        throw "selibs.lock.json is missing."
+    }
+
+    $lock = Read-SELibsLock -Path $lockPath
+    $packageProperties = @(
+        $lock.packages.PSObject.Properties |
+            Sort-Object Name
+    )
+
+    if ($packageProperties.Count -eq 0) {
+        Write-Output "No packages are installed."
+        return
+    }
+
+    $effectiveRegistryUrl = $RegistryUrl
+
+    if ([string]::IsNullOrWhiteSpace($effectiveRegistryUrl)) {
+        $effectiveRegistryUrl = [string]$lock.registry
+    }
+
+    $registry = Read-SELibsRegistry `
+        -RegistryUrl $effectiveRegistryUrl
+
+    $resolvedLibraries = Resolve-SELibsLibrariesPath `
+        -ModRoot $root `
+        -LibrariesPath ([string]$manifest.librariesPath)
+
+    $updateCount = 0
+    $modifiedCount = 0
+
+    Write-Output "Libraries: $($resolvedLibraries.RelativePath)"
+    Write-Output "Registry: $($registry.Source)"
+    Write-Output "Packages:"
+    Write-Output "  Package | Type | Installed | Latest | Status"
+
+    foreach ($property in $packageProperties) {
+        $packageId = [string]$property.Name
+        $entry = $property.Value
+        $installedText = [string]$entry.version
+        $installedVersion = ConvertTo-SELibsVersion `
+            -Version $installedText
+
+        $packageType = if ([bool]$entry.direct) {
+            "direct"
+        }
+        else {
+            "transitive"
+        }
+
+        $statusParts = New-Object System.Collections.ArrayList
+
+        try {
+            Test-SELibsManagedPackage `
+                -LibrariesRoot $resolvedLibraries.FullPath `
+                -PackageId $packageId `
+                -LockEntry $entry
+        }
+        catch {
+            [void]$statusParts.Add("modified")
+            $modifiedCount++
+        }
+
+        $latestText = "unknown"
+
+        try {
+            $latestDescriptor = Get-SELibsPackageDescriptor `
+                -Registry $registry `
+                -PackageId $packageId
+
+            $latestText = [string]$latestDescriptor.Version
+            $latestVersion = ConvertTo-SELibsVersion `
+                -Version $latestText
+
+            $comparison = $latestVersion.CompareTo($installedVersion)
+
+            if ($comparison -gt 0) {
+                [void]$statusParts.Add("update available")
+                $updateCount++
+            }
+            elseif ($comparison -eq 0) {
+                [void]$statusParts.Add("current")
+            }
+            else {
+                [void]$statusParts.Add("newer than registry")
+            }
+        }
+        catch {
+            [void]$statusParts.Add("latest unavailable")
+        }
+
+        Write-Output (
+            "  $packageId | $packageType | $installedText | " +
+            "$latestText | $($statusParts -join ', ')"
+        )
+    }
+
+    Write-Output (
+        "Summary: $($packageProperties.Count) packages installed; " +
+        "$updateCount updates available; $modifiedCount modified."
+    )
+}
 function Invoke-SELibsAdd {
     [CmdletBinding()]
     param(

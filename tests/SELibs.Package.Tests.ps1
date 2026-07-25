@@ -113,6 +113,81 @@ Assert-Equal `
     -Actual $byteJsonResult.id `
     -Message "Byte-backed JSON should decode as UTF-8."
 
+$originalGitHubApi = ${function:Invoke-SELibsGitHubApi}
+
+try {
+    Set-Item `
+        -Path Function:\Invoke-SELibsGitHubApi `
+        -Value {
+            param(
+                [Parameter(Mandatory = $true)]
+                [string]$Uri
+            )
+
+            return ,@(
+                [pscustomobject]@{
+                    tag_name = "other/v9.0.0"
+                    draft = $false
+                    prerelease = $false
+                    assets = @()
+                }
+                [pscustomobject]@{
+                    tag_name = "test/v1.0.0"
+                    draft = $false
+                    prerelease = $false
+                    assets = @(
+                        [pscustomobject]@{
+                            name = "Test.Package-1.0.0-package.json"
+                            browser_download_url = "https://example/1.0.0.json"
+                        }
+                    )
+                }
+                [pscustomobject]@{
+                    tag_name = "test/v2.0.0"
+                    draft = $false
+                    prerelease = $false
+                    assets = @(
+                        [pscustomobject]@{
+                            name = "Test.Package-2.0.0-package.json"
+                            browser_download_url = "https://example/2.0.0.json"
+                        }
+                    )
+                }
+                [pscustomobject]@{
+                    tag_name = "test/v3.0.0"
+                    draft = $false
+                    prerelease = $true
+                    assets = @()
+                }
+            )
+        }
+
+    $nestedRelease = Get-SELibsGitHubRelease `
+        -PackageId "Test.Package" `
+        -Route ([pscustomobject]@{
+            repository = "owner/repository"
+            releasePrefix = "test/v"
+        })
+
+    Assert-Equal `
+        -Expected "2.0.0" `
+        -Actual ([string]$nestedRelease.Version) `
+        -Message (
+            "GitHub release discovery did not flatten a nested " +
+            "Windows PowerShell response."
+        )
+
+    Assert-Equal `
+        -Expected "https://example/2.0.0.json" `
+        -Actual ([string]$nestedRelease.ManifestSource) `
+        -Message "GitHub release discovery selected the wrong manifest."
+}
+finally {
+    Set-Item `
+        -Path Function:\Invoke-SELibsGitHubApi `
+        -Value $originalGitHubApi
+}
+
 function New-TestPackageRelease {
     param(
         [Parameter(Mandatory = $true)]
@@ -326,6 +401,40 @@ try {
     finally {
         Pop-Location
     }
+
+    $statusOutput = @(
+        & (Join-Path $repoRoot "selibs.ps1") `
+            status `
+            -ModRoot $modRoot `
+            -RegistryUrl $registryPath
+    )
+
+    Assert-True `
+        -Condition (
+            $statusOutput -contains (
+                "  Test.Dependency | transitive | 1.0.0 | " +
+                "2.0.0 | update available"
+            )
+        ) `
+        -Message "Status did not report the outdated transitive package."
+
+    Assert-True `
+        -Condition (
+            $statusOutput -contains (
+                "  Test.Root | direct | 2.0.0 | " +
+                "3.0.0 | update available"
+            )
+        ) `
+        -Message "Status did not report the outdated direct package."
+
+    Assert-True `
+        -Condition (
+            $statusOutput -contains (
+                "Summary: 2 packages installed; " +
+                "2 updates available; 0 modified."
+            )
+        ) `
+        -Message "Status produced the wrong initial summary."
 
     Assert-True `
         -Condition ($output -contains "Added Test.Root 2.0.0.") `
@@ -635,6 +744,30 @@ try {
         "// local update edit`n",
         $script:Utf8NoBom
     )
+
+    $modifiedStatusOutput = @(
+        Invoke-SELibsStatus `
+            -ModRoot $updateModifiedRoot `
+            -RegistryUrl $registryPath
+    )
+
+    Assert-True `
+        -Condition (
+            $modifiedStatusOutput -contains (
+                "  Test.Root | direct | 2.0.0 | " +
+                "3.0.0 | modified, update available"
+            )
+        ) `
+        -Message "Status did not report a modified managed package."
+
+    Assert-True `
+        -Condition (
+            $modifiedStatusOutput -contains (
+                "Summary: 2 packages installed; " +
+                "2 updates available; 1 modified."
+            )
+        ) `
+        -Message "Status produced the wrong modified-package summary."
 
     Assert-Throws `
         -Action {
