@@ -25,6 +25,45 @@ function Get-SELibsWebHeaders {
     return $headers
 }
 
+function ConvertFrom-SELibsJsonContent {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [object]$Content,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Source
+    )
+
+    try {
+        if ($null -eq $Content) {
+            throw "The resource returned no content."
+        }
+
+        if ($Content -is [byte[]]) {
+            $json = [System.Text.Encoding]::UTF8.GetString($Content)
+        }
+        elseif ($Content -is [string]) {
+            $json = $Content
+        }
+        else {
+            throw (
+                "Unsupported content type " +
+                "'$($Content.GetType().FullName)'."
+            )
+        }
+
+        return $json | ConvertFrom-Json
+    }
+    catch {
+        throw (
+            "Could not parse JSON resource '$Source': " +
+            $_.Exception.Message
+        )
+    }
+}
+
 function Read-SELibsJsonResource {
     [CmdletBinding()]
     param(
@@ -34,8 +73,11 @@ function Read-SELibsJsonResource {
 
     try {
         if (Test-Path -LiteralPath $Source -PathType Leaf) {
-            return Get-Content -LiteralPath $Source -Raw |
-                ConvertFrom-Json
+            $content = Get-Content -LiteralPath $Source -Raw
+
+            return ConvertFrom-SELibsJsonContent `
+                -Content $content `
+                -Source $Source
         }
 
         $response = Invoke-WebRequest `
@@ -43,7 +85,9 @@ function Read-SELibsJsonResource {
             -UseBasicParsing `
             -Headers (Get-SELibsWebHeaders)
 
-        return $response.Content | ConvertFrom-Json
+        return ConvertFrom-SELibsJsonContent `
+            -Content $response.Content `
+            -Source $Source
     }
     catch {
         throw (
