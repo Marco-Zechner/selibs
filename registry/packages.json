@@ -1,4 +1,25 @@
 {
   "schemaVersion": 1,
-  "packages": {}
+  "packages": {
+    "Mz.ApiProtocol": {
+      "provider": "github",
+      "repository": "Marco-Zechner/space-engineers-mod-libraries",
+      "releasePrefix": "apiprotocol/v"
+    },
+    "Mz.Logging": {
+      "provider": "github",
+      "repository": "Marco-Zechner/space-engineers-mod-libraries",
+      "releasePrefix": "logging/v"
+    },
+    "Mz.Networking": {
+      "provider": "github",
+      "repository": "Marco-Zechner/space-engineers-mod-libraries",
+      "releasePrefix": "networking/v"
+    },
+    "Mz.SemanticVersioning": {
+      "provider": "github",
+      "repository": "Marco-Zechner/space-engineers-mod-libraries",
+      "releasePrefix": "semanticversioning/v"
+    }
+  }
 }
