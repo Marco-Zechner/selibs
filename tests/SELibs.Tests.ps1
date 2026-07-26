@@ -352,6 +352,35 @@ try {
         ) `
         -Message "Package-format documentation omits changelog ordering."
 
+    $productionRegistry = Get-Content `
+        -LiteralPath (Join-Path $repoRoot "registry\packages.json") `
+        -Raw |
+        ConvertFrom-Json
+
+    $expectedReleasePrefixes = [ordered]@{
+        "Mz.ApiProtocol" = "release/Mz.ApiProtocol/"
+        "Mz.Logging" = "release/Mz.Logging/"
+        "Mz.Networking" = "release/Mz.Networking/"
+        "Mz.SemanticVersioning" = "release/Mz.SemanticVersioning/"
+    }
+
+    foreach ($entry in $expectedReleasePrefixes.GetEnumerator()) {
+        $routeProperty = `
+            $productionRegistry.packages.PSObject.Properties[$entry.Key]
+
+        Assert-True `
+            -Condition ($null -ne $routeProperty) `
+            -Message "Production registry omits package '$($entry.Key)'."
+
+        Assert-Equal `
+            -Expected ([string]$entry.Value) `
+            -Actual ([string]$routeProperty.Value.releasePrefix) `
+            -Message (
+                "Production registry uses the wrong release prefix for " +
+                "'$($entry.Key)'."
+            )
+    }
+
     Write-Output "OK SELibs tests passed: $script:Passed assertions"
 }
 finally {
