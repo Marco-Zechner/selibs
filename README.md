@@ -57,6 +57,27 @@ Use `-RegistryUrl` to inspect another registry:
 selibs list -RegistryUrl "C:\path\to\packages.json"
 ```
 
+## View package changelogs
+
+Show the complete changelog published by the newest stable release:
+
+```shell
+selibs changelog Mz.ApiProtocol
+```
+
+Select an exact release manifest instead:
+
+```shell
+selibs changelog Mz.ApiProtocol@0.2.0
+```
+
+The selected package manifest contains the complete ordered history and SELibs
+prints every version from newest to oldest. Packages published before changelog
+metadata was introduced remain installable, but the changelog command reports
+that no history is available for those releases.
+
+Use `-RegistryUrl` with the changelog command to inspect another registry.
+
 ## Mod setup
 
 From the mod root, run:
