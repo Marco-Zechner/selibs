@@ -3,23 +3,33 @@
 SELibs is a global source-library manager and package-routing registry for
 Space Engineers mods.
 
-Install SELibs for the current Windows user from a downloaded or cloned release:
+## Install
 
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+Install SELibs for the current Windows user from a downloaded or cloned
+release:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+```
 
 The installer copies the runtime to `%LOCALAPPDATA%\SELibs`, adds
 `%LOCALAPPDATA%\SELibs\bin` to the user `PATH`, and can be run again to replace
-an existing managed installation. Open a new terminal after installation, then
-run SELibs from the root directory of any mod:
+an existing managed installation.
 
-    selibs init
+Open a new terminal after installation and confirm the command is available:
+
+```shell
+selibs help
+```
 
 A custom installation directory can be selected with `-InstallRoot`.
 
 Uninstall the default installation with:
 
-    powershell.exe -NoProfile -ExecutionPolicy Bypass `
-        -File "$env:LOCALAPPDATA\SELibs\uninstall.ps1"
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass `
+    -File "$env:LOCALAPPDATA\SELibs\uninstall.ps1"
+```
 
 The installer and uninstaller refuse to replace or remove a non-SELibs
 directory. Unrelated user `PATH` entries are preserved.
@@ -28,11 +38,32 @@ The `selibs.cmd` launcher invokes the Windows PowerShell 5.1-compatible
 `selibs.ps1` implementation, so the command works from `cmd.exe` and
 PowerShell without copying the manager into every mod.
 
+## Browse available libraries
+
+Show every package exposed by the selected registry and its newest stable
+release:
+
+```shell
+selibs list
+```
+
+The command is read-only. It reports every registry package, its newest stable
+numeric release, and its provider. A package is marked `unavailable` when its
+route cannot currently produce a supported release.
+
+Use `-RegistryUrl` to inspect another registry:
+
+```powershell
+selibs list -RegistryUrl "C:\path\to\packages.json"
+```
+
 ## Mod setup
 
 From the mod root, run:
 
-    selibs init
+```shell
+selibs init
+```
 
 SELibs will:
 
@@ -43,17 +74,20 @@ SELibs will:
 - require an explicit path when several script folders exist;
 - suggest `/.selibs/` for an existing `.gitignore` without editing it.
 
-An explicit destination can be selected with:
+Select an explicit destination with:
 
-    selibs init `
-        -LibrariesPath "Data/Scripts/MyMod/Libraries"
+```shell
+selibs init -LibrariesPath "Data/Scripts/MyMod/Libraries"
+```
 
 The configured destination must be inside the current mod and end in
 `Libraries`.
 
 Install the first direct library with an exact version:
 
-    selibs add Mz.ApiProtocol@0.2.0
+```shell
+selibs add Mz.ApiProtocol@0.2.0
+```
 
 SELibs resolves exact transitive dependencies through the central routing
 registry, verifies component checksums, installs source folders, updates
@@ -65,7 +99,9 @@ dependencies only once.
 
 Inspect the installed graph and check for newer stable releases with:
 
-    selibs status
+```shell
+selibs status
+```
 
 The status command is read-only. It reports each direct and transitive package,
 its installed version, the newest stable release currently exposed by the
@@ -75,15 +111,21 @@ re-resolves the complete compatible graph.
 
 Remove a direct library with:
 
-    selibs remove Mz.ApiProtocol
+```shell
+selibs remove Mz.ApiProtocol
+```
 
 Update a direct library to its newest stable release with:
 
-    selibs update Mz.ApiProtocol
+```shell
+selibs update Mz.ApiProtocol
+```
 
 Or select an exact release:
 
-    selibs update Mz.ApiProtocol@0.3.0
+```shell
+selibs update Mz.ApiProtocol@0.3.0
+```
 
 The complete graph is resolved again, so transitive dependencies are upgraded,
 installed, or removed as required.
@@ -99,9 +141,11 @@ The mod does not need its own copy of `selibs.ps1` or `selibs.cmd`.
 
 The intended project-local files are:
 
-    selibs.json
-    selibs.lock.json
-    .selibs/
+```text
+selibs.json
+selibs.lock.json
+.selibs/
+```
 
 `selibs.json` and `selibs.lock.json` are intended to be committed.
 `.selibs/` contains local cache and file-ownership state and should normally
@@ -109,17 +153,21 @@ be ignored.
 
 The current manifest format is:
 
-    {
-      "schemaVersion": 1,
-      "librariesPath": "Data/Scripts/MyMod/Libraries",
-      "dependencies": {}
-    }
+```json
+{
+  "schemaVersion": 1,
+  "librariesPath": "Data/Scripts/MyMod/Libraries",
+  "dependencies": {}
+}
+```
 
 ## Development
 
 Run the focused verification suite with:
 
-    .\scripts\verify.ps1
+```powershell
+.\scripts\verify.ps1
+```
 
 The tests execute under Windows PowerShell 5.1 and have no external
 dependencies.
