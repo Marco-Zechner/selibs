@@ -265,6 +265,57 @@ try {
         -Actual $after `
         -Message "Repeated init unexpectedly rewrote the manifest."
 
+    $helpOutput = @(Show-SELibsHelp)
+
+    Assert-True `
+        -Condition ($helpOutput -contains "  selibs list") `
+        -Message "Help does not advertise the list command."
+
+    $readmeText = Get-Content `
+        -LiteralPath (Join-Path $repoRoot "README.md") `
+        -Raw
+
+    $readmeFence = ([string][char]96) * 3
+    $fenceLines = @(
+        $readmeText.Split([char]10) |
+            Where-Object {
+                $_.StartsWith(
+                    $readmeFence,
+                    [System.StringComparison]::Ordinal
+                )
+            }
+    )
+
+    Assert-True `
+        -Condition ($fenceLines.Count -gt 0) `
+        -Message "README does not contain fenced code blocks."
+
+    Assert-Equal `
+        -Expected 0 `
+        -Actual ($fenceLines.Count % 2) `
+        -Message "README contains an unmatched code fence."
+
+    $untaggedOpeningCount = 0
+
+    for ($index = 0; $index -lt $fenceLines.Count; $index += 2) {
+        $language = $fenceLines[$index].
+            Substring($readmeFence.Length).
+            Trim()
+
+        if ([string]::IsNullOrWhiteSpace($language)) {
+            $untaggedOpeningCount++
+        }
+    }
+
+    Assert-Equal `
+        -Expected 0 `
+        -Actual $untaggedOpeningCount `
+        -Message "README contains an untagged opening code fence."
+
+    Assert-True `
+        -Condition ($readmeText.Contains("selibs list")) `
+        -Message "README does not document the list command."
+
     Write-Output "OK SELibs tests passed: $script:Passed assertions"
 }
 finally {

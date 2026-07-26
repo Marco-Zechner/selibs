@@ -1344,6 +1344,180 @@ function Remove-SELibsEmptyTransactionParent {
     }
 }
 
+function Format-SELibsTextTable {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string[]]$Headers,
+
+        [Parameter(Mandatory = $true)]
+        [System.Collections.IEnumerable]$Rows,
+
+        [string]$Indent = "  "
+    )
+
+    if ($Headers.Count -eq 0) {
+        throw "A table must define at least one column."
+    }
+
+    $headerCells = @(
+        $Headers |
+            ForEach-Object {
+                if ($null -eq $_) {
+                    ""
+                }
+                else {
+                    [string]$_
+                }
+            }
+    )
+
+    $normalizedRows = New-Object System.Collections.ArrayList
+
+    foreach ($rowValue in $Rows) {
+        $cells = @(
+            $rowValue |
+                ForEach-Object {
+                    if ($null -eq $_) {
+                        ""
+                    }
+                    else {
+                        [string]$_
+                    }
+                }
+        )
+
+        if ($cells.Count -ne $headerCells.Count) {
+            throw (
+                "A table row has $($cells.Count) cells; " +
+                "$($headerCells.Count) were expected."
+            )
+        }
+
+        [void]$normalizedRows.Add([string[]]$cells)
+    }
+
+    $widths = New-Object int[] $headerCells.Count
+
+    for ($column = 0; $column -lt $headerCells.Count; $column++) {
+        $widths[$column] = $headerCells[$column].Length
+    }
+
+    foreach ($cells in $normalizedRows) {
+        for ($column = 0; $column -lt $cells.Count; $column++) {
+            if ($cells[$column].Length -gt $widths[$column]) {
+                $widths[$column] = $cells[$column].Length
+            }
+        }
+    }
+
+    $lines = New-Object System.Collections.ArrayList
+    $headerParts = New-Object System.Collections.ArrayList
+    $separatorParts = New-Object System.Collections.ArrayList
+
+    for ($column = 0; $column -lt $headerCells.Count; $column++) {
+        if ($column -eq $headerCells.Count - 1) {
+            [void]$headerParts.Add($headerCells[$column])
+        }
+        else {
+            [void]$headerParts.Add(
+                $headerCells[$column].PadRight($widths[$column])
+            )
+        }
+
+        [void]$separatorParts.Add("-" * $widths[$column])
+    }
+
+    [void]$lines.Add($Indent + ($headerParts -join "  "))
+    [void]$lines.Add($Indent + ($separatorParts -join "  "))
+
+    foreach ($cells in $normalizedRows) {
+        $parts = New-Object System.Collections.ArrayList
+
+        for ($column = 0; $column -lt $cells.Count; $column++) {
+            if ($column -eq $cells.Count - 1) {
+                [void]$parts.Add($cells[$column])
+            }
+            else {
+                [void]$parts.Add(
+                    $cells[$column].PadRight($widths[$column])
+                )
+            }
+        }
+
+        [void]$lines.Add($Indent + ($parts -join "  "))
+    }
+
+    return @($lines)
+}
+
+function Invoke-SELibsList {
+    [CmdletBinding()]
+    param(
+        [string]$RegistryUrl
+    )
+
+    $registry = Read-SELibsRegistry -RegistryUrl $RegistryUrl
+    $packageProperties = @(
+        $registry.Value.packages.PSObject.Properties |
+            Sort-Object Name
+    )
+
+    Write-Output "Registry: $($registry.Source)"
+
+    if ($packageProperties.Count -eq 0) {
+        Write-Output "No packages are available."
+        return
+    }
+
+    $rows = New-Object System.Collections.ArrayList
+    $unavailableCount = 0
+
+    foreach ($property in $packageProperties) {
+        $packageId = [string]$property.Name
+        $route = $property.Value
+        $provider = [string]$route.provider
+        $latest = "unavailable"
+
+        if ([string]::IsNullOrWhiteSpace($provider)) {
+            $provider = "unknown"
+        }
+
+        try {
+            $release = Get-SELibsRelease `
+                -PackageId $packageId `
+                -Route $route
+
+            $latest = [string]$release.Version
+        }
+        catch {
+            $unavailableCount++
+        }
+
+        [void]$rows.Add(
+            [string[]]@(
+                $packageId
+                $latest
+                $provider
+            )
+        )
+    }
+
+    Write-Output "Available packages:"
+
+    Format-SELibsTextTable `
+        -Headers @("Package", "Latest", "Provider") `
+        -Rows $rows |
+        ForEach-Object {
+            Write-Output $_
+        }
+
+    Write-Output (
+        "Summary: $($packageProperties.Count) packages found; " +
+        "$unavailableCount unavailable."
+    )
+}
+
 function Invoke-SELibsStatus {
     [CmdletBinding()]
     param(
@@ -1400,11 +1574,7 @@ function Invoke-SELibsStatus {
 
     $updateCount = 0
     $modifiedCount = 0
-
-    Write-Output "Libraries: $($resolvedLibraries.RelativePath)"
-    Write-Output "Registry: $($registry.Source)"
-    Write-Output "Packages:"
-    Write-Output "  Package | Type | Installed | Latest | Status"
+    $rows = New-Object System.Collections.ArrayList
 
     foreach ($property in $packageProperties) {
         $packageId = [string]$property.Name
@@ -1461,11 +1631,33 @@ function Invoke-SELibsStatus {
             [void]$statusParts.Add("latest unavailable")
         }
 
-        Write-Output (
-            "  $packageId | $packageType | $installedText | " +
-            "$latestText | $($statusParts -join ', ')"
+        [void]$rows.Add(
+            [string[]]@(
+                $packageId
+                $packageType
+                $installedText
+                $latestText
+                ($statusParts -join ", ")
+            )
         )
     }
+
+    Write-Output "Libraries: $($resolvedLibraries.RelativePath)"
+    Write-Output "Registry: $($registry.Source)"
+    Write-Output "Packages:"
+
+    Format-SELibsTextTable `
+        -Headers @(
+            "Package"
+            "Type"
+            "Installed"
+            "Latest"
+            "Status"
+        ) `
+        -Rows $rows |
+        ForEach-Object {
+            Write-Output $_
+        }
 
     Write-Output (
         "Summary: $($packageProperties.Count) packages installed; " +
