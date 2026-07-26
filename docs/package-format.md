@@ -92,10 +92,18 @@ removed, or modified.
 
 ## Updates
 
+`selibs update` selects the newest stable release of every direct dependency,
+resolves one final graph, prints the complete change plan, and asks for
+confirmation. `-Force` accepts that plan without prompting.
+
 `selibs update Package.Id` selects the newest stable numeric release exposed by
-the package route. `selibs update Package.Id@2.1.0` selects an exact release.
+one package route. `selibs update Package.Id@2.1.0` selects an exact release.
 
 The complete direct and transitive graph is resolved before any installed
 folder changes. Existing managed files are checksum-verified, changed packages
 are staged, and folder swaps plus manifest and lock updates are rolled back
 together if the transaction fails.
+
+A mod contains one exact version of each package. If two dependency paths
+require different versions, resolution fails before the transaction starts and
+reports both paths so compatible direct-package versions can be selected.

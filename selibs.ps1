@@ -356,6 +356,7 @@ function Show-SELibsHelp {
     Write-Output "  selibs changelog Mz.ApiProtocol"
     Write-Output "  selibs changelog Mz.ApiProtocol@0.2.0"
     Write-Output "  selibs status"
+    Write-Output "  selibs update"
     Write-Output "  selibs update Mz.ApiProtocol"
     Write-Output "  selibs update Mz.ApiProtocol@0.3.0"
     Write-Output "  selibs remove Mz.ApiProtocol"
@@ -366,7 +367,9 @@ function Show-SELibsHelp {
     Write-Output "  list       Show registry packages and newest stable releases."
     Write-Output "  changelog  Show a package's complete published change history."
     Write-Output "  status     Show installed, latest, and modified package state."
-    Write-Output "  update  Update a direct library and its dependency graph."
+    Write-Output (
+        "  update     Update one direct library, or all direct libraries."
+    )
     Write-Output "  remove  Remove a direct library and unused dependencies."
     Write-Output "  help    Show this help."
 }
@@ -415,17 +418,11 @@ if ($MyInvocation.InvocationName -ne ".") {
         }
 
         "update" {
-            if ([string]::IsNullOrWhiteSpace($PackageSpec)) {
-                throw (
-                    "The update command requires a package ID " +
-                    "or ID@version."
-                )
-            }
-
             Invoke-SELibsUpdate `
                 -ModRoot $ModRoot `
                 -PackageSpec $PackageSpec `
-                -RegistryUrl $RegistryUrl
+                -RegistryUrl $RegistryUrl `
+                -Force:$Force
         }
 
         "remove" {

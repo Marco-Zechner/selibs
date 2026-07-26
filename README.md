@@ -118,6 +118,11 @@ Additional direct libraries can be added with the same command. SELibs
 re-resolves the complete exact-version dependency graph and installs shared
 dependencies only once.
 
+A mod contains one exact version of each package. If two direct libraries
+require different versions of the same transitive library, SELibs stops before
+changing files and reports both requirement paths. Select direct-library
+versions whose exact dependency requirements agree.
+
 Inspect the installed graph and check for newer stable releases with:
 
 ```shell
@@ -136,7 +141,12 @@ Remove a direct library with:
 selibs remove Mz.ApiProtocol
 ```
 
-Update a direct library to its newest stable release with:
+Run `selibs update` to select the newest stable release of every direct
+library, resolve one final dependency graph, and display the complete change
+plan. SELibs asks for confirmation before modifying files. Pass `-Force` to
+accept the displayed plan non-interactively.
+
+Update one direct library to its newest stable release with:
 
 ```shell
 selibs update Mz.ApiProtocol

@@ -113,6 +113,24 @@ Assert-Equal `
     -Actual $byteJsonResult.id `
     -Message "Byte-backed JSON should decode as UTF-8."
 
+$originalProgressPreference = $ProgressPreference
+$ProgressPreference = "Continue"
+
+$observedProgressPreference = Invoke-SELibsWithoutProgress -Action {
+    return $ProgressPreference
+}
+
+Assert-Equal `
+    -Expected "SilentlyContinue" `
+    -Actual $observedProgressPreference `
+    -Message "Web operations did not suppress transient progress output."
+
+Assert-Equal `
+    -Expected "Continue" `
+    -Actual $ProgressPreference `
+    -Message "The progress preference was not restored."
+
+$ProgressPreference = $originalProgressPreference
 $originalGitHubApi = ${function:Invoke-SELibsGitHubApi}
 
 try {
@@ -360,6 +378,28 @@ try {
 
     New-TestPackageRelease `
         -CatalogRoot $catalog `
+        -Id "Test.Second" `
+        -Version "2.0.0" `
+        -Folders @("Test.Second") `
+        -Dependencies @{
+            "Test.Dependency" = "2.0.0"
+        } `
+        -FileText "// second v2" |
+        Out-Null
+
+    New-TestPackageRelease `
+        -CatalogRoot $catalog `
+        -Id "Test.Conflict" `
+        -Version "1.0.0" `
+        -Folders @("Test.Conflict") `
+        -Dependencies @{
+            "Test.Dependency" = "2.0.0"
+        } `
+        -FileText "// conflict" |
+        Out-Null
+
+    New-TestPackageRelease `
+        -CatalogRoot $catalog `
         -Id "Test.BadHash" `
         -Version "1.0.0" `
         -Folders @("Test.BadHash") `
@@ -394,6 +434,10 @@ try {
                 "Test.Second" = [ordered]@{
                     provider = "filesystem"
                     location = (Join-Path $catalog "Test.Second")
+                }
+                "Test.Conflict" = [ordered]@{
+                    provider = "filesystem"
+                    location = (Join-Path $catalog "Test.Conflict")
                 }
                 "Test.BadHash" = [ordered]@{
                     provider = "filesystem"
@@ -516,7 +560,7 @@ try {
     Assert-True `
         -Condition (
             $listOutput -contains (
-                "Summary: 4 packages found; 0 unavailable."
+                "Summary: 5 packages found; 0 unavailable."
             )
         ) `
         -Message "List produced the wrong package summary."
@@ -684,6 +728,58 @@ try {
         ))) `
         -Message "Transaction files were not cleaned."
 
+    $conflictMessage = $null
+
+    try {
+        Invoke-SELibsAdd `
+            -ModRoot $modRoot `
+            -PackageSpec "Test.Conflict@1.0.0" `
+            -RegistryUrl $registryPath |
+            Out-Null
+    }
+    catch {
+        $conflictMessage = $_.Exception.Message
+    }
+
+    Assert-True `
+        -Condition (-not [string]::IsNullOrWhiteSpace($conflictMessage)) `
+        -Message "An incompatible exact dependency graph was accepted."
+
+    Assert-True `
+        -Condition (
+            $conflictMessage -like
+            "*Test.Root@2.0.0 -> Test.Dependency@1.0.0*"
+        ) `
+        -Message "The Test.Root dependency requirement path was not reported."
+
+    Assert-True `
+        -Condition (
+            $conflictMessage -like
+            "*Test.Conflict@1.0.0 -> Test.Dependency@2.0.0*"
+        ) `
+        -Message "The Test.Conflict requirement path was not reported."
+
+    Assert-True `
+        -Condition (
+            $conflictMessage -like
+            "*one exact version of each package per mod*"
+        ) `
+        -Message "The exact-version conflict policy was not explained."
+
+    $manifestAfterConflict = Get-Content `
+        -LiteralPath (Join-Path $modRoot "selibs.json") `
+        -Raw |
+        ConvertFrom-Json
+
+    Assert-True `
+        -Condition (
+            $null -eq (
+                Get-SELibsObjectProperty `
+                    -Object $manifestAfterConflict.dependencies `
+                    -Name "Test.Conflict"
+            )
+        ) `
+        -Message "A rejected dependency conflict changed the manifest."
     $secondOutput = @(
         Invoke-SELibsAdd `
             -ModRoot $modRoot `
@@ -883,6 +979,157 @@ try {
         -Actual ([string]$updatedLock.packages."Test.Dependency".version) `
         -Message "The updated dependency version was not locked."
 
+    $updateAllRoot = Join-Path $testRoot "UpdateAllMod"
+
+    New-Item `
+        -ItemType Directory `
+        -Path (Join-Path $updateAllRoot "Data\Scripts\UpdateAllMod") `
+        -Force |
+        Out-Null
+
+    Invoke-SELibsInit -ModRoot $updateAllRoot | Out-Null
+
+    Invoke-SELibsAdd `
+        -ModRoot $updateAllRoot `
+        -PackageSpec "Test.Root@2.0.0" `
+        -RegistryUrl $registryPath |
+        Out-Null
+
+    Invoke-SELibsAdd `
+        -ModRoot $updateAllRoot `
+        -PackageSpec "Test.Second@1.0.0" `
+        -RegistryUrl $registryPath |
+        Out-Null
+
+    Set-Item `
+        -Path Function:\global:Read-Host `
+        -Value {
+            param([string]$Prompt)
+            return "n"
+        }
+
+    try {
+        $cancelledUpdateOutput = @(
+            & (Join-Path $repoRoot "selibs.ps1") `
+                update `
+                -ModRoot $updateAllRoot `
+                -RegistryUrl $registryPath
+        )
+    }
+    finally {
+        Remove-Item `
+            -Path Function:\global:Read-Host `
+            -ErrorAction SilentlyContinue
+    }
+
+    Assert-True `
+        -Condition (
+            $cancelledUpdateOutput -contains "Planned package changes:"
+        ) `
+        -Message "Update-all did not display its change plan."
+
+    Assert-True `
+        -Condition (
+            $cancelledUpdateOutput -contains (
+                "  Update direct Test.Root 2.0.0 -> 3.0.0"
+            )
+        ) `
+        -Message "The Test.Root update was absent from the plan."
+
+    Assert-True `
+        -Condition (
+            $cancelledUpdateOutput -contains (
+                "  Update direct Test.Second 1.0.0 -> 2.0.0"
+            )
+        ) `
+        -Message "The Test.Second update was absent from the plan."
+
+    Assert-True `
+        -Condition (
+            $cancelledUpdateOutput -contains "Update cancelled."
+        ) `
+        -Message "Update-all cancellation was not reported."
+
+    $cancelledManifest = Get-Content `
+        -LiteralPath (Join-Path $updateAllRoot "selibs.json") `
+        -Raw |
+        ConvertFrom-Json
+
+    Assert-Equal `
+        -Expected "2.0.0" `
+        -Actual ([string]$cancelledManifest.dependencies."Test.Root") `
+        -Message "A cancelled update changed Test.Root."
+
+    Assert-Equal `
+        -Expected "1.0.0" `
+        -Actual ([string]$cancelledManifest.dependencies."Test.Second") `
+        -Message "A cancelled update changed Test.Second."
+
+    Set-Item `
+        -Path Function:\global:Read-Host `
+        -Value {
+            param([string]$Prompt)
+            return "yes"
+        }
+
+    try {
+        $updateAllOutput = @(
+            & (Join-Path $repoRoot "selibs.ps1") `
+                update `
+                -ModRoot $updateAllRoot `
+                -RegistryUrl $registryPath
+        )
+    }
+    finally {
+        Remove-Item `
+            -Path Function:\global:Read-Host `
+            -ErrorAction SilentlyContinue
+    }
+
+    Assert-True `
+        -Condition (
+            $updateAllOutput -contains "Updated Test.Root 2.0.0 -> 3.0.0."
+        ) `
+        -Message "Update-all did not update Test.Root."
+
+    Assert-True `
+        -Condition (
+            $updateAllOutput -contains "Updated Test.Second 1.0.0 -> 2.0.0."
+        ) `
+        -Message "Update-all did not update Test.Second."
+
+    Assert-True `
+        -Condition (
+            $updateAllOutput -contains (
+                "Updated dependency Test.Dependency 1.0.0 -> 2.0.0."
+            )
+        ) `
+        -Message "Update-all did not reconcile the shared dependency."
+
+    $updateAllManifest = Get-Content `
+        -LiteralPath (Join-Path $updateAllRoot "selibs.json") `
+        -Raw |
+        ConvertFrom-Json
+
+    Assert-Equal `
+        -Expected "3.0.0" `
+        -Actual ([string]$updateAllManifest.dependencies."Test.Root") `
+        -Message "Update-all did not persist Test.Root."
+
+    Assert-Equal `
+        -Expected "2.0.0" `
+        -Actual ([string]$updateAllManifest.dependencies."Test.Second") `
+        -Message "Update-all did not persist Test.Second."
+
+    $updateAllLock = Get-Content `
+        -LiteralPath (Join-Path $updateAllRoot "selibs.lock.json") `
+        -Raw |
+        ConvertFrom-Json
+
+    Assert-Equal `
+        -Expected "2.0.0" `
+        -Actual ([string]$updateAllLock.packages."Test.Dependency".version) `
+        -Message "Update-all locked the wrong shared dependency version."
     $updateModifiedRoot = Join-Path $testRoot "UpdateModifiedMod"
 
     New-Item `

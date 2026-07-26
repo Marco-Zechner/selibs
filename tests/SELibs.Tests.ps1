@@ -268,6 +268,10 @@ try {
     $helpOutput = @(Show-SELibsHelp)
 
     Assert-True `
+        -Condition ($helpOutput -contains "  selibs update") `
+        -Message "Help does not advertise update-all."
+
+    Assert-True `
         -Condition ($helpOutput -contains "  selibs list") `
         -Message "Help does not advertise the list command."
 
@@ -325,6 +329,10 @@ try {
     Assert-True `
         -Condition ($readmeText.Contains("selibs changelog")) `
         -Message "README does not document the changelog command."
+
+    Assert-True `
+        -Condition ($readmeText.Contains('Run `selibs update`')) `
+        -Message "README does not document update-all."
 
     $packageFormatText = Get-Content `
         -LiteralPath (Join-Path $repoRoot "docs\package-format.md") `

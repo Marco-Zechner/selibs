@@ -25,6 +25,24 @@ function Get-SELibsWebHeaders {
     return $headers
 }
 
+function Invoke-SELibsWithoutProgress {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$Action
+    )
+
+    $previousProgressPreference = $ProgressPreference
+
+    try {
+        $ProgressPreference = "SilentlyContinue"
+        & $Action
+    }
+    finally {
+        $ProgressPreference = $previousProgressPreference
+    }
+}
+
 function ConvertFrom-SELibsJsonContent {
     [CmdletBinding()]
     param(
@@ -80,10 +98,12 @@ function Read-SELibsJsonResource {
                 -Source $Source
         }
 
-        $response = Invoke-WebRequest `
-            -Uri $Source `
-            -UseBasicParsing `
-            -Headers (Get-SELibsWebHeaders)
+        $response = Invoke-SELibsWithoutProgress -Action {
+            Invoke-WebRequest `
+                -Uri $Source `
+                -UseBasicParsing `
+                -Headers (Get-SELibsWebHeaders)
+        }
 
         return ConvertFrom-SELibsJsonContent `
             -Content $response.Content `
@@ -105,10 +125,12 @@ function Invoke-SELibsGitHubApi {
     )
 
     try {
-        return Invoke-RestMethod `
-            -Uri $Uri `
-            -UseBasicParsing `
-            -Headers (Get-SELibsWebHeaders -GitHubApi)
+        return Invoke-SELibsWithoutProgress -Action {
+            Invoke-RestMethod `
+                -Uri $Uri `
+                -UseBasicParsing `
+                -Headers (Get-SELibsWebHeaders -GitHubApi)
+        }
     }
     catch {
         throw "GitHub request failed for '$Uri': $($_.Exception.Message)"
@@ -141,11 +163,13 @@ function Copy-SELibsResource {
     }
 
     try {
-        Invoke-WebRequest `
-            -Uri $Source `
-            -UseBasicParsing `
-            -Headers (Get-SELibsWebHeaders) `
-            -OutFile $Destination
+        Invoke-SELibsWithoutProgress -Action {
+            Invoke-WebRequest `
+                -Uri $Source `
+                -UseBasicParsing `
+                -Headers (Get-SELibsWebHeaders) `
+                -OutFile $Destination
+        }
     }
     catch {
         throw "Could not download '$Source': $($_.Exception.Message)"
@@ -844,6 +868,7 @@ function Resolve-SELibsPackageGraph {
     )
 
     $resolved = [ordered]@{}
+    $resolvedPaths = @{}
     $visiting = @{}
     $order = New-Object System.Collections.ArrayList
 
@@ -852,7 +877,9 @@ function Resolve-SELibsPackageGraph {
             [Parameter(Mandatory = $true)]
             [string]$PackageId,
 
-            [string]$RequestedVersion
+            [string]$RequestedVersion,
+
+            [string[]]$RequirementPath = @()
         )
 
         if ($resolved.Contains($PackageId)) {
@@ -862,9 +889,19 @@ function Resolve-SELibsPackageGraph {
                 -not [string]::IsNullOrWhiteSpace($RequestedVersion) -and
                 $existing.Version -ne $RequestedVersion
             ) {
+                $requestedPath = @(
+                    $RequirementPath +
+                    "$PackageId@$RequestedVersion"
+                ) -join " -> "
+
                 throw (
-                    "Dependency conflict for '$PackageId': " +
-                    "'$($existing.Version)' and '$RequestedVersion'."
+                    "Dependency conflict for '$PackageId'.`n" +
+                    "  Existing requirement: " +
+                    "$($resolvedPaths[$PackageId])`n" +
+                    "  Conflicting requirement: $requestedPath`n" +
+                    "SELibs installs one exact version of each package per " +
+                    "mod. Update the direct packages so their dependency " +
+                    "requirements agree."
                 )
             }
 
@@ -872,7 +909,12 @@ function Resolve-SELibsPackageGraph {
         }
 
         if ($visiting.ContainsKey($PackageId)) {
-            throw "Dependency cycle detected at '$PackageId'."
+            $cyclePath = @(
+                $RequirementPath +
+                $PackageId
+            ) -join " -> "
+
+            throw "Dependency cycle detected: $cyclePath."
         }
 
         $visiting[$PackageId] = $true
@@ -883,13 +925,25 @@ function Resolve-SELibsPackageGraph {
                 -PackageId $PackageId `
                 -RequestedVersion $RequestedVersion
 
-            foreach ($dependency in $descriptor.Dependencies.PSObject.Properties) {
+            $currentPath = @(
+                $RequirementPath +
+                "$($descriptor.Id)@$($descriptor.Version)"
+            )
+
+            foreach (
+                $dependency in @(
+                    $descriptor.Dependencies.PSObject.Properties |
+                        Sort-Object Name
+                )
+            ) {
                 Resolve-Package `
                     -PackageId $dependency.Name `
-                    -RequestedVersion ([string]$dependency.Value)
+                    -RequestedVersion ([string]$dependency.Value) `
+                    -RequirementPath $currentPath
             }
 
             $resolved[$PackageId] = $descriptor
+            $resolvedPaths[$PackageId] = $currentPath -join " -> "
             [void]$order.Add($descriptor)
         }
         finally {
@@ -1219,6 +1273,7 @@ function Resolve-SELibsProjectGraph {
     )
 
     $resolved = [ordered]@{}
+    $resolvedPaths = @{}
     $visiting = @{}
     $order = New-Object System.Collections.ArrayList
 
@@ -1227,7 +1282,9 @@ function Resolve-SELibsProjectGraph {
             [Parameter(Mandatory = $true)]
             [string]$PackageId,
 
-            [string]$RequestedVersion
+            [string]$RequestedVersion,
+
+            [string[]]$RequirementPath = @()
         )
 
         if ($resolved.Contains($PackageId)) {
@@ -1237,9 +1294,19 @@ function Resolve-SELibsProjectGraph {
                 -not [string]::IsNullOrWhiteSpace($RequestedVersion) -and
                 $existing.Version -ne $RequestedVersion
             ) {
+                $requestedPath = @(
+                    $RequirementPath +
+                    "$PackageId@$RequestedVersion"
+                ) -join " -> "
+
                 throw (
-                    "Dependency conflict for '$PackageId': " +
-                    "'$($existing.Version)' and '$RequestedVersion'."
+                    "Dependency conflict for '$PackageId'.`n" +
+                    "  Existing requirement: " +
+                    "$($resolvedPaths[$PackageId])`n" +
+                    "  Conflicting requirement: $requestedPath`n" +
+                    "SELibs installs one exact version of each package per " +
+                    "mod. Update the direct packages so their dependency " +
+                    "requirements agree."
                 )
             }
 
@@ -1247,7 +1314,12 @@ function Resolve-SELibsProjectGraph {
         }
 
         if ($visiting.ContainsKey($PackageId)) {
-            throw "Dependency cycle detected at '$PackageId'."
+            $cyclePath = @(
+                $RequirementPath +
+                $PackageId
+            ) -join " -> "
+
+            throw "Dependency cycle detected: $cyclePath."
         }
 
         $visiting[$PackageId] = $true
@@ -1258,6 +1330,11 @@ function Resolve-SELibsProjectGraph {
                 -PackageId $PackageId `
                 -RequestedVersion $RequestedVersion
 
+            $currentPath = @(
+                $RequirementPath +
+                "$($descriptor.Id)@$($descriptor.Version)"
+            )
+
             foreach (
                 $dependency in @(
                     $descriptor.Dependencies.PSObject.Properties |
@@ -1266,10 +1343,12 @@ function Resolve-SELibsProjectGraph {
             ) {
                 Resolve-ProjectPackage `
                     -PackageId $dependency.Name `
-                    -RequestedVersion ([string]$dependency.Value)
+                    -RequestedVersion ([string]$dependency.Value) `
+                    -RequirementPath $currentPath
             }
 
             $resolved[$PackageId] = $descriptor
+            $resolvedPaths[$PackageId] = $currentPath -join " -> "
             [void]$order.Add($descriptor)
         }
         finally {
@@ -2456,10 +2535,11 @@ function Invoke-SELibsUpdate {
         [Parameter(Mandatory = $true)]
         [string]$ModRoot,
 
-        [Parameter(Mandatory = $true)]
         [string]$PackageSpec,
 
-        [string]$RegistryUrl
+        [string]$RegistryUrl,
+
+        [switch]$Force
     )
 
     $root = Get-SELibsFullModRoot -ModRoot $ModRoot
@@ -2477,23 +2557,45 @@ function Invoke-SELibsUpdate {
 
     $manifest = Read-SELibsManifest -Path $manifestPath
     $lock = Read-SELibsLock -Path $lockPath
-    $requested = ConvertFrom-SELibsPackageSpec `
-        -PackageSpec $PackageSpec
-
-    $directProperty = Get-SELibsObjectProperty `
-        -Object $manifest.dependencies `
-        -Name $requested.Id
-
-    if ($null -eq $directProperty) {
-        throw "Package '$($requested.Id)' is not a direct dependency."
-    }
-
-    $canonicalId = $directProperty.Name
-    $oldDirectVersion = [string]$directProperty.Value
     $directDependencies = ConvertTo-SELibsDependencyMap `
         -Dependencies $manifest.dependencies
 
-    $directDependencies[$canonicalId] = $requested.Version
+    if ($directDependencies.Count -eq 0) {
+        Write-Output "No direct packages are installed."
+        return
+    }
+
+    $oldDirectVersions = [ordered]@{}
+
+    foreach ($directId in @($directDependencies.Keys | Sort-Object)) {
+        $oldDirectVersions[$directId] = [string]$directDependencies[$directId]
+    }
+
+    $updateAll = [string]::IsNullOrWhiteSpace($PackageSpec)
+    $canonicalId = $null
+    $oldDirectVersion = $null
+
+    if ($updateAll) {
+        foreach ($directId in @($directDependencies.Keys)) {
+            $directDependencies[$directId] = $null
+        }
+    }
+    else {
+        $requested = ConvertFrom-SELibsPackageSpec `
+            -PackageSpec $PackageSpec
+
+        $directProperty = Get-SELibsObjectProperty `
+            -Object $manifest.dependencies `
+            -Name $requested.Id
+
+        if ($null -eq $directProperty) {
+            throw "Package '$($requested.Id)' is not a direct dependency."
+        }
+
+        $canonicalId = $directProperty.Name
+        $oldDirectVersion = [string]$directProperty.Value
+        $directDependencies[$canonicalId] = $requested.Version
+    }
 
     $effectiveRegistryUrl = $RegistryUrl
 
@@ -2518,10 +2620,14 @@ function Invoke-SELibsUpdate {
         $descriptorById[$descriptor.Id] = $descriptor
     }
 
-    $updatedDescriptor = $descriptorById[$canonicalId]
+    $updatedDescriptor = $null
 
-    if ($null -eq $updatedDescriptor) {
-        throw "Resolved graph did not contain '$canonicalId'."
+    if (-not $updateAll) {
+        $updatedDescriptor = $descriptorById[$canonicalId]
+
+        if ($null -eq $updatedDescriptor) {
+            throw "Resolved graph did not contain '$canonicalId'."
+        }
     }
 
     $finalDirectDependencies = [ordered]@{}
@@ -2536,6 +2642,20 @@ function Invoke-SELibsUpdate {
         $finalDirectDependencies[$descriptor.Id] = $descriptor.Version
     }
 
+    $directVersionChanges = [ordered]@{}
+
+    foreach ($directId in @($finalDirectDependencies.Keys | Sort-Object)) {
+        $oldVersion = [string]$oldDirectVersions[$directId]
+        $newVersion = [string]$finalDirectDependencies[$directId]
+
+        if ($oldVersion -ne $newVersion) {
+            $directVersionChanges[$directId] = [pscustomobject]@{
+                OldVersion = $oldVersion
+                NewVersion = $newVersion
+            }
+        }
+    }
+
     $existingProperties = @{}
 
     foreach ($property in $lock.packages.PSObject.Properties) {
@@ -2546,12 +2666,6 @@ function Invoke-SELibsUpdate {
         -ModRoot $root `
         -LibrariesPath ([string]$manifest.librariesPath)
 
-    foreach ($property in $lock.packages.PSObject.Properties) {
-        Test-SELibsManagedPackage `
-            -LibrariesRoot $resolvedLibraries.FullPath `
-            -PackageId $property.Name `
-            -LockEntry $property.Value
-    }
 
     $changedIds = @{}
     $removedProperties = New-Object System.Collections.ArrayList
@@ -2578,14 +2692,83 @@ function Invoke-SELibsUpdate {
     if (
         $changedIds.Count -eq 0 -and
         $removedProperties.Count -eq 0 -and
-        $updatedDescriptor.Version -eq $oldDirectVersion
+        $directVersionChanges.Count -eq 0
     ) {
-        Write-Output (
-            "$canonicalId is already at version " +
-            "$($updatedDescriptor.Version)."
-        )
+        if ($updateAll) {
+            Write-Output "All direct packages are already up to date."
+        }
+        else {
+            Write-Output (
+                "$canonicalId is already at version " +
+                "$($updatedDescriptor.Version)."
+            )
+        }
 
         return
+    }
+
+    if ($updateAll) {
+        Write-Output "Planned package changes:"
+
+        foreach ($directId in @($directVersionChanges.Keys | Sort-Object)) {
+            $change = $directVersionChanges[$directId]
+
+            Write-Output (
+                "  Update direct $directId " +
+                "$($change.OldVersion) -> $($change.NewVersion)"
+            )
+        }
+
+        foreach ($descriptor in $descriptors) {
+            if ($finalDirectDependencies.Contains($descriptor.Id)) {
+                continue
+            }
+
+            if (-not $changedIds.ContainsKey($descriptor.Id)) {
+                continue
+            }
+
+            $existingProperty = Get-SELibsObjectProperty `
+                -Object $lock.packages `
+                -Name $descriptor.Id
+
+            if ($null -eq $existingProperty) {
+                Write-Output (
+                    "  Install dependency " +
+                    "$($descriptor.Id) $($descriptor.Version)"
+                )
+            }
+            else {
+                Write-Output (
+                    "  Update dependency $($descriptor.Id) " +
+                    "$($existingProperty.Value.version) -> " +
+                    "$($descriptor.Version)"
+                )
+            }
+        }
+
+        foreach ($property in $removedProperties) {
+            Write-Output (
+                "  Remove dependency " +
+                "$($property.Name) $($property.Value.version)"
+            )
+        }
+
+        if (-not $Force) {
+            $answer = Read-Host "Apply all package updates? [y/N]"
+
+            if ([string]$answer -notmatch '(?i)^(y|yes)$') {
+                Write-Output "Update cancelled."
+                return
+            }
+        }
+    }
+
+    foreach ($property in $lock.packages.PSObject.Properties) {
+        Test-SELibsManagedPackage `
+            -LibrariesRoot $resolvedLibraries.FullPath `
+            -PackageId $property.Name `
+            -LockEntry $property.Value
     }
 
     $replaceableFolders = @{}
@@ -2773,13 +2956,17 @@ function Invoke-SELibsUpdate {
             throw
         }
 
-        Write-Output (
-            "Updated $canonicalId $oldDirectVersion -> " +
-            "$($updatedDescriptor.Version)."
-        )
+        foreach ($directId in @($directVersionChanges.Keys | Sort-Object)) {
+            $change = $directVersionChanges[$directId]
+
+            Write-Output (
+                "Updated $directId $($change.OldVersion) -> " +
+                "$($change.NewVersion)."
+            )
+        }
 
         foreach ($descriptor in $descriptors) {
-            if ($descriptor.Id -eq $canonicalId) {
+            if ($finalDirectDependencies.Contains($descriptor.Id)) {
                 continue
             }
 
