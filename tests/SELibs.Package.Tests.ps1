@@ -412,20 +412,29 @@ try {
     Assert-True `
         -Condition (
             $statusOutput -contains (
-                "  Test.Dependency | transitive | 1.0.0 | " +
-                "2.0.0 | update available"
+                "  Test.Dependency  transitive  1.0.0      " +
+                "2.0.0   update available"
             )
         ) `
-        -Message "Status did not report the outdated transitive package."
+        -Message "Status did not report the aligned transitive package."
 
     Assert-True `
         -Condition (
             $statusOutput -contains (
-                "  Test.Root | direct | 2.0.0 | " +
-                "3.0.0 | update available"
+                "  Test.Root        direct      2.0.0      " +
+                "3.0.0   update available"
             )
         ) `
-        -Message "Status did not report the outdated direct package."
+        -Message "Status did not report the aligned direct package."
+
+    Assert-True `
+        -Condition (
+            $statusOutput -contains (
+                "  ---------------  ----------  ---------  " +
+                "------  ----------------"
+            )
+        ) `
+        -Message "Status did not render an aligned table separator."
 
     Assert-True `
         -Condition (
@@ -435,6 +444,50 @@ try {
             )
         ) `
         -Message "Status produced the wrong initial summary."
+
+    $listOutput = @(
+        Invoke-SELibsList -RegistryUrl $registryPath
+    )
+
+    Assert-True `
+        -Condition (
+            $listOutput -contains (
+                "  Package          Latest  Provider"
+            )
+        ) `
+        -Message "List did not render the aligned package header."
+
+    Assert-True `
+        -Condition (
+            $listOutput -contains (
+                "  ---------------  ------  ----------"
+            )
+        ) `
+        -Message "List did not render the aligned table separator."
+
+    Assert-True `
+        -Condition (
+            $listOutput -contains (
+                "  Test.Dependency  2.0.0   filesystem"
+            )
+        ) `
+        -Message "List did not report the newest dependency release."
+
+    Assert-True `
+        -Condition (
+            $listOutput -contains (
+                "  Test.Root        3.0.0   filesystem"
+            )
+        ) `
+        -Message "List did not report the newest root release."
+
+    Assert-True `
+        -Condition (
+            $listOutput -contains (
+                "Summary: 4 packages found; 0 unavailable."
+            )
+        ) `
+        -Message "List produced the wrong package summary."
 
     Assert-True `
         -Condition ($output -contains "Added Test.Root 2.0.0.") `
@@ -754,11 +807,11 @@ try {
     Assert-True `
         -Condition (
             $modifiedStatusOutput -contains (
-                "  Test.Root | direct | 2.0.0 | " +
-                "3.0.0 | modified, update available"
+                "  Test.Root        direct      2.0.0      " +
+                "3.0.0   modified, update available"
             )
         ) `
-        -Message "Status did not report a modified managed package."
+        -Message "Status did not report an aligned modified package."
 
     Assert-True `
         -Condition (
