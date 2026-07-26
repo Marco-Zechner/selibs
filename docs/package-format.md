@@ -31,6 +31,21 @@ The package manifest contains:
       "schemaVersion": 1,
       "id": "Package.Id",
       "version": "2.1.0",
+      "changelog": [
+        {
+          "version": "2.1.0",
+          "changes": [
+            "Added the new routing API.",
+            "Improved invalid-packet diagnostics."
+          ]
+        },
+        {
+          "version": "2.0.0",
+          "changes": [
+            "Published the previous stable release."
+          ]
+        }
+      ],
       "dependencies": {
         "Other.Library": "1.0.0"
       },
@@ -43,6 +58,15 @@ The package manifest contains:
         "sha256": "<64 lowercase hexadecimal characters>"
       }
     }
+
+The optional `changelog` array is ordered from newest to oldest. Its first
+entry must match the manifest version, versions must be unique, and every entry
+must contain at least one non-empty change. The field remains optional so
+schema-version-1 packages published before changelog support remain installable.
+
+`selibs changelog Package.Id` reads the complete history from the newest stable
+release. Select an exact release with
+`selibs changelog Package.Id@2.1.0`.
 
 Dependency versions are exact in the initial implementation.
 

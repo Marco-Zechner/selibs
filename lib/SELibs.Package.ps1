@@ -569,6 +569,139 @@ function Get-SELibsComponentSource {
     return [string]$matches[0].browser_download_url
 }
 
+function ConvertTo-SELibsPackageChangelog {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PackageId,
+
+        [Parameter(Mandatory = $true)]
+        [string]$PackageVersion,
+
+        [AllowNull()]
+        [object]$Value
+    )
+
+    if ($null -eq $Value) {
+        return @()
+    }
+
+    $entries = @(
+        $Value |
+            ForEach-Object { $_ }
+    )
+
+    if ($entries.Count -eq 0) {
+        throw "Package '$PackageId' defines an empty changelog."
+    }
+
+    $result = New-Object System.Collections.ArrayList
+    $versionClaims = @{}
+    $previousVersion = $null
+
+    foreach ($entry in $entries) {
+        if ($null -eq $entry) {
+            throw "Package '$PackageId' contains a null changelog entry."
+        }
+
+        $versionProperty = $entry.PSObject.Properties["version"]
+
+        if ($null -eq $versionProperty) {
+            throw (
+                "Package '$PackageId' contains a changelog entry " +
+                "without a version."
+            )
+        }
+
+        $versionText = [string]$versionProperty.Value
+
+        try {
+            $parsedVersion = ConvertTo-SELibsVersion `
+                -Version $versionText
+        }
+        catch {
+            throw (
+                "Package '$PackageId' contains invalid changelog version " +
+                "'$versionText'."
+            )
+        }
+
+        $versionKey = $versionText.ToLowerInvariant()
+
+        if ($versionClaims.ContainsKey($versionKey)) {
+            throw (
+                "Package '$PackageId' declares changelog version " +
+                "'$versionText' more than once."
+            )
+        }
+
+        if (
+            $null -ne $previousVersion -and
+            $parsedVersion.CompareTo($previousVersion) -ge 0
+        ) {
+            throw (
+                "Package '$PackageId' changelog must be ordered from " +
+                "newest to oldest."
+            )
+        }
+
+        $changesProperty = $entry.PSObject.Properties["changes"]
+
+        if ($null -eq $changesProperty) {
+            throw (
+                "Package '$PackageId' changelog version '$versionText' " +
+                "does not define changes."
+            )
+        }
+
+        $changes = @(
+            $changesProperty.Value |
+                ForEach-Object { $_ }
+        )
+
+        if ($changes.Count -eq 0) {
+            throw (
+                "Package '$PackageId' changelog version '$versionText' " +
+                "does not contain any changes."
+            )
+        }
+
+        $normalizedChanges = New-Object System.Collections.ArrayList
+
+        foreach ($changeValue in $changes) {
+            $change = [string]$changeValue
+
+            if ([string]::IsNullOrWhiteSpace($change)) {
+                throw (
+                    "Package '$PackageId' changelog version '$versionText' " +
+                    "contains an empty change."
+                )
+            }
+
+            [void]$normalizedChanges.Add($change)
+        }
+
+        [void]$result.Add(
+            [pscustomobject]@{
+                Version = $versionText
+                Changes = @($normalizedChanges)
+            }
+        )
+
+        $versionClaims[$versionKey] = $true
+        $previousVersion = $parsedVersion
+    }
+
+    if ([string]$result[0].Version -ne $PackageVersion) {
+        throw (
+            "Package '$PackageId' changelog must begin with manifest " +
+            "version '$PackageVersion'."
+        )
+    }
+
+    return @($result)
+}
+
 function Get-SELibsPackageDescriptor {
     [CmdletBinding()]
     param(
@@ -622,6 +755,21 @@ function Get-SELibsPackageDescriptor {
         )
     }
 
+    $changelogProperty = $packageManifest.PSObject.Properties["changelog"]
+    $changelogValue = if ($null -eq $changelogProperty) {
+        $null
+    }
+    else {
+        $changelogProperty.Value
+    }
+
+    $changelog = @(
+        ConvertTo-SELibsPackageChangelog `
+            -PackageId $PackageId `
+            -PackageVersion ([string]$packageManifest.version) `
+            -Value $changelogValue
+    )
+
     if ($null -eq $packageManifest.dependencies) {
         throw "Package '$PackageId' does not define dependencies."
     }
@@ -674,6 +822,7 @@ function Get-SELibsPackageDescriptor {
     return [pscustomobject]@{
         Id = [string]$packageManifest.id
         Version = [string]$packageManifest.version
+        Changelog = $changelog
         Dependencies = $packageManifest.dependencies
         Folders = $folders
         ComponentSource = $componentSource
@@ -1516,6 +1665,48 @@ function Invoke-SELibsList {
         "Summary: $($packageProperties.Count) packages found; " +
         "$unavailableCount unavailable."
     )
+}
+
+function Invoke-SELibsChangelog {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PackageSpec,
+
+        [string]$RegistryUrl
+    )
+
+    $requested = ConvertFrom-SELibsPackageSpec `
+        -PackageSpec $PackageSpec
+
+    $registry = Read-SELibsRegistry -RegistryUrl $RegistryUrl
+
+    $descriptor = Get-SELibsPackageDescriptor `
+        -Registry $registry `
+        -PackageId $requested.Id `
+        -RequestedVersion $requested.Version
+
+    $changelog = @($descriptor.Changelog)
+
+    if ($changelog.Count -eq 0) {
+        throw (
+            "Package '$($descriptor.Id)@$($descriptor.Version)' " +
+            "does not publish changelog metadata."
+        )
+    }
+
+    Write-Output "Package: $($descriptor.Id)"
+    Write-Output "Selected release: $($descriptor.Version)"
+    Write-Output "Changelog:"
+
+    foreach ($entry in $changelog) {
+        Write-Output ""
+        Write-Output "  $($entry.Version)"
+
+        foreach ($change in @($entry.Changes)) {
+            Write-Output "    - $change"
+        }
+    }
 }
 
 function Invoke-SELibsStatus {

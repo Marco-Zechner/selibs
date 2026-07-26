@@ -271,6 +271,12 @@ try {
         -Condition ($helpOutput -contains "  selibs list") `
         -Message "Help does not advertise the list command."
 
+    Assert-True `
+        -Condition (
+            $helpOutput -contains "  selibs changelog Mz.ApiProtocol"
+        ) `
+        -Message "Help does not advertise the changelog command."
+
     $readmeText = Get-Content `
         -LiteralPath (Join-Path $repoRoot "README.md") `
         -Raw
@@ -315,6 +321,28 @@ try {
     Assert-True `
         -Condition ($readmeText.Contains("selibs list")) `
         -Message "README does not document the list command."
+
+    Assert-True `
+        -Condition ($readmeText.Contains("selibs changelog")) `
+        -Message "README does not document the changelog command."
+
+    $packageFormatText = Get-Content `
+        -LiteralPath (Join-Path $repoRoot "docs\package-format.md") `
+        -Raw
+
+    Assert-True `
+        -Condition (
+            $packageFormatText.Contains('"changelog": [')
+        ) `
+        -Message "Package-format documentation omits changelog metadata."
+
+    Assert-True `
+        -Condition (
+            $packageFormatText.Contains(
+                "ordered from newest to oldest"
+            )
+        ) `
+        -Message "Package-format documentation omits changelog ordering."
 
     Write-Output "OK SELibs tests passed: $script:Passed assertions"
 }
