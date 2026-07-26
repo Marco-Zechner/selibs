@@ -271,6 +271,12 @@ try {
         -Condition ($helpOutput -contains "  selibs list") `
         -Message "Help does not advertise the list command."
 
+    Assert-True `
+        -Condition (
+            $helpOutput -contains "  selibs changelog Mz.ApiProtocol"
+        ) `
+        -Message "Help does not advertise the changelog command."
+
     $readmeText = Get-Content `
         -LiteralPath (Join-Path $repoRoot "README.md") `
         -Raw

@@ -1,7 +1,16 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("help", "init", "add", "list", "status", "update", "remove")]
+    [ValidateSet(
+        "help",
+        "init",
+        "add",
+        "list",
+        "changelog",
+        "status",
+        "update",
+        "remove"
+    )]
     [string]$Command = "help",
 
     [Parameter(Position = 1)]
@@ -344,6 +353,8 @@ function Show-SELibsHelp {
     )
     Write-Output "  selibs add Mz.ApiProtocol@0.2.0"
     Write-Output "  selibs list"
+    Write-Output "  selibs changelog Mz.ApiProtocol"
+    Write-Output "  selibs changelog Mz.ApiProtocol@0.2.0"
     Write-Output "  selibs status"
     Write-Output "  selibs update Mz.ApiProtocol"
     Write-Output "  selibs update Mz.ApiProtocol@0.3.0"
@@ -352,8 +363,9 @@ function Show-SELibsHelp {
     Write-Output "Commands:"
     Write-Output "  init    Create selibs.json and the Libraries directory."
     Write-Output "  add     Add a direct library and reconcile dependencies."
-    Write-Output "  list    Show all registry packages and newest stable releases."
-    Write-Output "  status  Show installed, latest, and modified package state."
+    Write-Output "  list       Show registry packages and newest stable releases."
+    Write-Output "  changelog  Show a package's complete published change history."
+    Write-Output "  status     Show installed, latest, and modified package state."
     Write-Output "  update  Update a direct library and its dependency graph."
     Write-Output "  remove  Remove a direct library and unused dependencies."
     Write-Output "  help    Show this help."
@@ -381,6 +393,19 @@ if ($MyInvocation.InvocationName -ne ".") {
 
         "list" {
             Invoke-SELibsList -RegistryUrl $RegistryUrl
+        }
+
+        "changelog" {
+            if ([string]::IsNullOrWhiteSpace($PackageSpec)) {
+                throw (
+                    "The changelog command requires a package ID " +
+                    "or ID@version."
+                )
+            }
+
+            Invoke-SELibsChangelog `
+                -PackageSpec $PackageSpec `
+                -RegistryUrl $RegistryUrl
         }
 
         "status" {
