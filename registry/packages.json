@@ -4,22 +4,22 @@
     "Mz.ApiProtocol": {
       "provider": "github",
       "repository": "Marco-Zechner/space-engineers-mod-libraries",
-      "releasePrefix": "apiprotocol/v"
+      "releasePrefix": "release/Mz.ApiProtocol/"
     },
     "Mz.Logging": {
       "provider": "github",
       "repository": "Marco-Zechner/space-engineers-mod-libraries",
-      "releasePrefix": "logging/v"
+      "releasePrefix": "release/Mz.Logging/"
     },
     "Mz.Networking": {
       "provider": "github",
       "repository": "Marco-Zechner/space-engineers-mod-libraries",
-      "releasePrefix": "networking/v"
+      "releasePrefix": "release/Mz.Networking/"
     },
     "Mz.SemanticVersioning": {
       "provider": "github",
       "repository": "Marco-Zechner/space-engineers-mod-libraries",
-      "releasePrefix": "semanticversioning/v"
+      "releasePrefix": "release/Mz.SemanticVersioning/"
     }
   }
 }

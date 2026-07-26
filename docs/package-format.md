@@ -10,11 +10,11 @@ A GitHub-hosted package uses:
     {
       "provider": "github",
       "repository": "Author/repository",
-      "releasePrefix": "library-name-v"
+      "releasePrefix": "release/Package.Id/"
     }
 
 For example, version `2.1.0` is discovered from the release tag
-`library-name-v2.1.0`.
+`release/Package.Id/2.1.0`.
 
 The `filesystem` provider exists for deterministic local testing.
 
