@@ -205,6 +205,8 @@ function New-TestPackageRelease {
         [Parameter(Mandatory = $true)]
         [hashtable]$Dependencies,
 
+        [object[]]$Changelog,
+
         [string]$FileText = "// test source"
     )
 
@@ -245,10 +247,25 @@ function New-TestPackageRelease {
         $dependencyObject[$dependencyId] = $Dependencies[$dependencyId]
     }
 
+    $changelogEntries = if ($null -eq $Changelog) {
+        @(
+            [ordered]@{
+                version = $Version
+                changes = @(
+                    "Published test release $Version."
+                )
+            }
+        )
+    }
+    else {
+        @($Changelog)
+    }
+
     $manifest = [ordered]@{
         schemaVersion = 1
         id = $Id
         version = $Version
+        changelog = $changelogEntries
         dependencies = $dependencyObject
         folders = $Folders
         component = [ordered]@{
@@ -312,6 +329,21 @@ try {
         -Dependencies @{
             "Test.Dependency" = "2.0.0"
         } `
+        -Changelog @(
+            [ordered]@{
+                version = "3.0.0"
+                changes = @(
+                    "Improved root package."
+                    "Updated dependency integration."
+                )
+            }
+            [ordered]@{
+                version = "2.0.0"
+                changes = @(
+                    "Published the root package."
+                )
+            }
+        ) `
         -FileText "// root v3" |
         Out-Null
 
@@ -488,6 +520,87 @@ try {
             )
         ) `
         -Message "List produced the wrong package summary."
+
+    $changelogOutput = @(
+        & (Join-Path $repoRoot "selibs.ps1") `
+            changelog `
+            "Test.Root" `
+            -RegistryUrl $registryPath
+    )
+
+    Assert-True `
+        -Condition ($changelogOutput -contains "Package: Test.Root") `
+        -Message "Changelog did not report the package ID."
+
+    Assert-True `
+        -Condition (
+            $changelogOutput -contains "Selected release: 3.0.0"
+        ) `
+        -Message "Changelog did not select the newest stable release."
+
+    Assert-True `
+        -Condition (
+            $changelogOutput -contains "    - Improved root package."
+        ) `
+        -Message "Changelog did not print current changes."
+
+    Assert-True `
+        -Condition (
+            $changelogOutput -contains "    - Published the root package."
+        ) `
+        -Message "Changelog did not print previous changes."
+
+    $latestIndex = [Array]::IndexOf($changelogOutput, "  3.0.0")
+    $previousIndex = [Array]::IndexOf($changelogOutput, "  2.0.0")
+
+    Assert-True `
+        -Condition (
+            $latestIndex -ge 0 -and
+            $previousIndex -gt $latestIndex
+        ) `
+        -Message "Changelog was not printed newest first."
+
+    $exactChangelogOutput = @(
+        & (Join-Path $repoRoot "selibs.ps1") `
+            changelog `
+            "Test.Root@2.0.0" `
+            -RegistryUrl $registryPath
+    )
+
+    Assert-True `
+        -Condition (
+            $exactChangelogOutput -contains "Selected release: 2.0.0"
+        ) `
+        -Message "Exact changelog selection used the wrong release."
+
+    Assert-Equal `
+        -Expected 0 `
+        -Actual @(
+            ConvertTo-SELibsPackageChangelog `
+                -PackageId "Test.Legacy" `
+                -PackageVersion "1.0.0" `
+                -Value $null
+        ).Count `
+        -Message "A missing legacy changelog was rejected."
+
+    Assert-Throws `
+        -Action {
+            ConvertTo-SELibsPackageChangelog `
+                -PackageId "Test.Invalid" `
+                -PackageVersion "1.0.0" `
+                -Value @(
+                    [pscustomobject]@{
+                        version = "0.9.0"
+                        changes = @("Older.")
+                    }
+                    [pscustomobject]@{
+                        version = "1.0.0"
+                        changes = @("Newer.")
+                    }
+                ) |
+                Out-Null
+        } `
+        -ExpectedMessagePart "newest to oldest"
 
     Assert-True `
         -Condition ($output -contains "Added Test.Root 2.0.0.") `
