@@ -366,6 +366,10 @@ try {
             repository = "Marco-Zechner/SE-CommandAPI"
             releasePrefix = "release/Mz.CommandAPI.Consumer/"
         }
+        "Mz.RichHudChatAPI.Consumer" = [ordered]@{
+            repository = "Marco-Zechner/SE-RichHudChatAPI"
+            releasePrefix = "release/Mz.RichHudChatAPI.Consumer/"
+        }
         "Mz.Logging" = [ordered]@{
             repository = "Marco-Zechner/space-engineers-mod-libraries"
             releasePrefix = "release/Mz.Logging/"
