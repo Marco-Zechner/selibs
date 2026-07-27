@@ -6,6 +6,11 @@
       "repository": "Marco-Zechner/space-engineers-mod-libraries",
       "releasePrefix": "release/Mz.ApiProtocol/"
     },
+    "Mz.CommandAPI.Consumer": {
+      "provider": "github",
+      "repository": "Marco-Zechner/SE-CommandAPI",
+      "releasePrefix": "release/Mz.CommandAPI.Consumer/"
+    },
     "Mz.Logging": {
       "provider": "github",
       "repository": "Marco-Zechner/space-engineers-mod-libraries",
