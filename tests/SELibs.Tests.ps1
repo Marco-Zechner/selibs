@@ -357,14 +357,30 @@ try {
         -Raw |
         ConvertFrom-Json
 
-    $expectedReleasePrefixes = [ordered]@{
-        "Mz.ApiProtocol" = "release/Mz.ApiProtocol/"
-        "Mz.Logging" = "release/Mz.Logging/"
-        "Mz.Networking" = "release/Mz.Networking/"
-        "Mz.SemanticVersioning" = "release/Mz.SemanticVersioning/"
+    $expectedRoutes = [ordered]@{
+        "Mz.ApiProtocol" = [ordered]@{
+            repository = "Marco-Zechner/space-engineers-mod-libraries"
+            releasePrefix = "release/Mz.ApiProtocol/"
+        }
+        "Mz.CommandAPI.Consumer" = [ordered]@{
+            repository = "Marco-Zechner/SE-CommandAPI"
+            releasePrefix = "release/Mz.CommandAPI.Consumer/"
+        }
+        "Mz.Logging" = [ordered]@{
+            repository = "Marco-Zechner/space-engineers-mod-libraries"
+            releasePrefix = "release/Mz.Logging/"
+        }
+        "Mz.Networking" = [ordered]@{
+            repository = "Marco-Zechner/space-engineers-mod-libraries"
+            releasePrefix = "release/Mz.Networking/"
+        }
+        "Mz.SemanticVersioning" = [ordered]@{
+            repository = "Marco-Zechner/space-engineers-mod-libraries"
+            releasePrefix = "release/Mz.SemanticVersioning/"
+        }
     }
 
-    foreach ($entry in $expectedReleasePrefixes.GetEnumerator()) {
+    foreach ($entry in $expectedRoutes.GetEnumerator()) {
         $routeProperty = `
             $productionRegistry.packages.PSObject.Properties[$entry.Key]
 
@@ -373,7 +389,15 @@ try {
             -Message "Production registry omits package '$($entry.Key)'."
 
         Assert-Equal `
-            -Expected ([string]$entry.Value) `
+            -Expected ([string]$entry.Value.repository) `
+            -Actual ([string]$routeProperty.Value.repository) `
+            -Message (
+                "Production registry uses the wrong repository for " +
+                "'$($entry.Key)'."
+            )
+
+        Assert-Equal `
+            -Expected ([string]$entry.Value.releasePrefix) `
             -Actual ([string]$routeProperty.Value.releasePrefix) `
             -Message (
                 "Production registry uses the wrong release prefix for " +
