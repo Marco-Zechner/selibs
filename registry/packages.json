@@ -11,6 +11,11 @@
       "repository": "Marco-Zechner/SE-CommandAPI",
       "releasePrefix": "release/Mz.CommandAPI.Consumer/"
     },
+    "Mz.RichHudChatAPI.Consumer": {
+      "provider": "github",
+      "repository": "Marco-Zechner/SE-RichHudChatAPI",
+      "releasePrefix": "release/Mz.RichHudChatAPI.Consumer/"
+    },
     "Mz.Logging": {
       "provider": "github",
       "repository": "Marco-Zechner/space-engineers-mod-libraries",
