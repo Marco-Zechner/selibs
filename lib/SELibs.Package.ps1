@@ -2331,6 +2331,283 @@ function Invoke-SELibsAdd {
     }
 }
 
+function Get-SELibsLockedPackageDescriptor {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PackageId,
+
+        [Parameter(Mandatory = $true)]
+        [object]$LockEntry
+    )
+
+    $packages = New-Object PSObject
+
+    Add-Member `
+        -InputObject $packages `
+        -MemberType NoteProperty `
+        -Name $PackageId `
+        -Value $LockEntry.source
+
+    $lockedRegistry = [pscustomobject]@{
+        Source = "selibs.lock.json"
+        Value = [pscustomobject]@{
+            packages = $packages
+        }
+    }
+
+    return Get-SELibsPackageDescriptor `
+        -Registry $lockedRegistry `
+        -PackageId $PackageId `
+        -RequestedVersion ([string]$LockEntry.version)
+}
+
+function Invoke-SELibsRepair {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ModRoot,
+
+        [string]$PackageId,
+
+        [switch]$Force
+    )
+
+    $root = Get-SELibsFullModRoot -ModRoot $ModRoot
+    $manifestPath = Join-Path $root "selibs.json"
+    $lockPath = Join-Path $root "selibs.lock.json"
+    $statePath = Join-Path $root ".selibs"
+
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        throw "This mod is not initialized. Run 'selibs init' first."
+    }
+
+    if (-not (Test-Path -LiteralPath $lockPath -PathType Leaf)) {
+        throw "selibs.lock.json is missing."
+    }
+
+    if (
+        -not [string]::IsNullOrWhiteSpace($PackageId) -and
+        (
+            $PackageId.Contains("@") -or
+            $PackageId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+        )
+    ) {
+        throw "The repair command requires one valid package ID."
+    }
+
+    $manifest = Read-SELibsManifest -Path $manifestPath
+    $lock = Read-SELibsLock -Path $lockPath
+    $resolvedLibraries = Resolve-SELibsLibrariesPath `
+        -ModRoot $root `
+        -LibrariesPath ([string]$manifest.librariesPath)
+
+    $candidateProperties = @()
+
+    if ([string]::IsNullOrWhiteSpace($PackageId)) {
+        $candidateProperties = @(
+            $lock.packages.PSObject.Properties |
+                Sort-Object Name
+        )
+    }
+    else {
+        $property = Get-SELibsObjectProperty `
+            -Object $lock.packages `
+            -Name $PackageId
+
+        if ($null -eq $property) {
+            throw "Package '$PackageId' is not installed."
+        }
+
+        $candidateProperties = @($property)
+    }
+
+    $repairProperties = New-Object System.Collections.ArrayList
+
+    foreach ($property in $candidateProperties) {
+        $drift = Get-SELibsManagedPackageDrift `
+            -LibrariesRoot $resolvedLibraries.FullPath `
+            -PackageId $property.Name `
+            -LockEntry $property.Value
+
+        if ($drift.HasChanges) {
+            [void]$repairProperties.Add($property)
+        }
+    }
+
+    if ($repairProperties.Count -eq 0) {
+        if ([string]::IsNullOrWhiteSpace($PackageId)) {
+            Write-Output "No managed package changes to repair."
+        }
+        else {
+            Write-Output "Package '$($candidateProperties[0].Name)' has no managed changes."
+        }
+
+        return
+    }
+
+    Write-Output "Planned package repairs:"
+
+    foreach ($property in $repairProperties) {
+        Write-Output (
+            "  Restore $($property.Name) $($property.Value.version)"
+        )
+    }
+
+    if (-not $Force) {
+        $answer = Read-Host "Restore managed package files? [y/N]"
+
+        if ([string]$answer -notmatch '(?i)^(y|yes)$') {
+            Write-Output "Repair cancelled."
+            return
+        }
+    }
+
+    New-Item -ItemType Directory -Path $statePath -Force | Out-Null
+
+    $transactionRoot = Join-Path `
+        $statePath `
+        ("tmp\repair-" + [Guid]::NewGuid().ToString("N"))
+
+    $backupLibraries = Join-Path $transactionRoot "backup\Libraries"
+    $stagedPackages = @{}
+    $movedFolders = New-Object System.Collections.ArrayList
+    $createdTargets = New-Object System.Collections.ArrayList
+
+    try {
+        foreach ($property in $repairProperties) {
+            $packageId = [string]$property.Name
+            $entry = $property.Value
+            $descriptor = Get-SELibsLockedPackageDescriptor `
+                -PackageId $packageId `
+                -LockEntry $entry
+
+            $packageRoot = Join-Path `
+                $transactionRoot `
+                ("packages\" + $packageId)
+
+            $archivePath = Join-Path $packageRoot "component.zip"
+            $extractPath = Join-Path $packageRoot "extract"
+
+            Copy-SELibsResource `
+                -Source $descriptor.ComponentSource `
+                -Destination $archivePath
+
+            $actualHash = (
+                Get-FileHash `
+                    -LiteralPath $archivePath `
+                    -Algorithm SHA256
+            ).Hash.ToLowerInvariant()
+
+            if ($actualHash -ne $descriptor.ComponentSha256) {
+                throw (
+                    "Component checksum mismatch for " +
+                    "'$packageId@$($entry.version)'."
+                )
+            }
+
+            Expand-SELibsComponentArchive `
+                -ArchivePath $archivePath `
+                -Destination $extractPath
+
+            $extractedLibraries = Join-Path $extractPath "Libraries"
+            $stagedDrift = Get-SELibsManagedPackageDrift `
+                -LibrariesRoot $extractedLibraries `
+                -PackageId $packageId `
+                -LockEntry $entry
+
+            if ($stagedDrift.HasChanges) {
+                throw (
+                    "Repair source for '$packageId@$($entry.version)' " +
+                    "does not match selibs.lock.json."
+                )
+            }
+
+            $stagedPackages[$packageId] = $extractedLibraries
+        }
+
+        foreach ($property in $repairProperties) {
+            $packageId = [string]$property.Name
+            $entry = $property.Value
+            $stagedLibraries = $stagedPackages[$packageId]
+
+            foreach ($folderValue in @($entry.folders)) {
+                $folder = [string]$folderValue
+                $source = Join-Path $resolvedLibraries.FullPath $folder
+                $backup = Join-Path $backupLibraries $folder
+                $backupParent = Split-Path -Parent $backup
+
+                if (Test-Path -LiteralPath $source) {
+                    New-Item `
+                        -ItemType Directory `
+                        -Path $backupParent `
+                        -Force |
+                        Out-Null
+
+                    Move-Item `
+                        -LiteralPath $source `
+                        -Destination $backup
+
+                    [void]$movedFolders.Add([pscustomobject]@{
+                        Source = $backup
+                        Destination = $source
+                    })
+                }
+
+                $stagedFolder = Join-Path $stagedLibraries $folder
+                [void]$createdTargets.Add($source)
+
+                Copy-Item `
+                    -LiteralPath $stagedFolder `
+                    -Destination $source `
+                    -Recurse
+            }
+        }
+
+        foreach ($property in $repairProperties) {
+            Write-Output (
+                "Repaired $($property.Name) $($property.Value.version)."
+            )
+        }
+    }
+    catch {
+        foreach ($target in $createdTargets) {
+            if (Test-Path -LiteralPath $target) {
+                Remove-Item -LiteralPath $target -Recurse -Force
+            }
+        }
+
+        for (
+            $index = $movedFolders.Count - 1;
+            $index -ge 0;
+            $index--
+        ) {
+            $moved = $movedFolders[$index]
+
+            if (Test-Path -LiteralPath $moved.Source) {
+                $parent = Split-Path -Parent $moved.Destination
+                New-Item -ItemType Directory -Path $parent -Force | Out-Null
+
+                Move-Item `
+                    -LiteralPath $moved.Source `
+                    -Destination $moved.Destination
+            }
+        }
+
+        throw
+    }
+    finally {
+        if (Test-Path -LiteralPath $transactionRoot) {
+            Remove-Item `
+                -LiteralPath $transactionRoot `
+                -Recurse `
+                -Force
+        }
+
+        Remove-SELibsEmptyTransactionParent `
+            -TransactionRoot $transactionRoot
+    }
+}
 function Get-SELibsReachablePackages {
     [CmdletBinding()]
     param(

@@ -272,6 +272,16 @@ try {
         -Message "Help does not advertise update-all."
 
     Assert-True `
+        -Condition ($helpOutput -contains "  selibs repair") `
+        -Message "Help does not advertise repair-all."
+
+    Assert-True `
+        -Condition (
+            $helpOutput -contains "  selibs repair Mz.ApiProtocol"
+        ) `
+        -Message "Help does not advertise selected-package repair."
+
+    Assert-True `
         -Condition ($helpOutput -contains "  selibs list") `
         -Message "Help does not advertise the list command."
 
@@ -334,6 +344,18 @@ try {
         -Condition ($readmeText.Contains('Run `selibs update`')) `
         -Message "README does not document update-all."
 
+    Assert-True `
+        -Condition (
+            $readmeText.Contains("selibs repair Mz.ApiProtocol")
+        ) `
+        -Message "README does not document selected-package repair."
+
+    Assert-True `
+        -Condition (
+            $readmeText.Contains("Run ``selibs repair``")
+        ) `
+        -Message "README does not document repair-all."
+
     $packageFormatText = Get-Content `
         -LiteralPath (Join-Path $repoRoot "docs\package-format.md") `
         -Raw
@@ -351,6 +373,12 @@ try {
             )
         ) `
         -Message "Package-format documentation omits changelog ordering."
+
+    Assert-True `
+        -Condition (
+            $packageFormatText.Contains("## Managed-package repair")
+        ) `
+        -Message "Package-format documentation omits managed-package repair."
 
     $productionRegistry = Get-Content `
         -LiteralPath (Join-Path $repoRoot "registry\packages.json") `

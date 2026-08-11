@@ -131,9 +131,25 @@ selibs status
 
 The status command is read-only. It reports each direct and transitive package,
 its installed version, the newest stable release currently exposed by the
-registry, and whether its checksum-managed files were modified. A newer
+registry, and whether its checksum-managed files were modified. When managed
+content has drifted, status also lists the exact added, missing, and modified
+paths grouped by package. A newer
 transitive release is informational; updating a direct package still
 re-resolves the complete compatible graph.
+
+Restore one modified package to the exact release recorded in
+`selibs.lock.json` with:
+
+```shell
+selibs repair Mz.ApiProtocol
+```
+
+Run `selibs repair` without a package ID to restore every drifted managed
+package. SELibs displays the repair plan and asks for confirmation before
+replacing files. Pass `-Force` to accept that repair plan non-interactively.
+Repair uses the source route and exact version recorded in the lock, verifies
+the staged package against the existing locked file hashes, and does not
+rewrite `selibs.json` or `selibs.lock.json`.
 
 Remove a direct library with:
 

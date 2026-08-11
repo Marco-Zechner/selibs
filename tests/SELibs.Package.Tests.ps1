@@ -1263,6 +1263,236 @@ try {
         ) `
         -Message "A rejected update lost the local source modification."
 
+    $repairLockPath = Join-Path $updateModifiedRoot "selibs.lock.json"
+    $repairLockBefore = Get-Content -LiteralPath $repairLockPath -Raw
+
+    Set-Item `
+        -Path Function:\global:Read-Host `
+        -Value {
+            param([string]$Prompt)
+            return "n"
+        }
+
+    try {
+        $cancelledRepairOutput = @(
+            Invoke-SELibsRepair `
+                -ModRoot $updateModifiedRoot `
+                -PackageId "Test.Root"
+        )
+    }
+    finally {
+        Remove-Item `
+            -Path Function:\global:Read-Host `
+            -ErrorAction SilentlyContinue
+    }
+
+    Assert-True `
+        -Condition (
+            $cancelledRepairOutput -contains "Planned package repairs:"
+        ) `
+        -Message "Repair did not display its change plan."
+
+    Assert-True `
+        -Condition (
+            $cancelledRepairOutput -contains "  Restore Test.Root 2.0.0"
+        ) `
+        -Message "Repair did not identify the exact locked release."
+
+    Assert-True `
+        -Condition (
+            $cancelledRepairOutput -contains "Repair cancelled."
+        ) `
+        -Message "Repair cancellation was not reported."
+
+    $cancelledRepairDrift = Get-SELibsManagedPackageDrift `
+        -LibrariesRoot (Join-Path `
+            $updateModifiedRoot `
+            "Data\Scripts\UpdateModifiedMod\Libraries") `
+        -PackageId "Test.Root" `
+        -LockEntry (
+            (Get-Content -LiteralPath $repairLockPath -Raw |
+                ConvertFrom-Json).packages."Test.Root"
+        )
+
+    Assert-True `
+        -Condition ([bool]$cancelledRepairDrift.HasChanges) `
+        -Message "Cancelled repair unexpectedly changed managed files."
+
+    $repairOutput = @(
+        Invoke-SELibsRepair `
+            -ModRoot $updateModifiedRoot `
+            -PackageId "Test.Root" `
+            -Force
+    )
+
+    Assert-True `
+        -Condition (
+            $repairOutput -contains "Repaired Test.Root 2.0.0."
+        ) `
+        -Message "Selected repair did not report restored package version."
+
+    Assert-Equal `
+        -Expected "// root`n" `
+        -Actual ([System.IO.File]::ReadAllText($updateModifiedFile)) `
+        -Message "Selected repair did not restore the modified file."
+
+    Assert-Equal `
+        -Expected "// root`n" `
+        -Actual ([System.IO.File]::ReadAllText($missingStatusFile)) `
+        -Message "Selected repair did not restore the missing file."
+
+    Assert-True `
+        -Condition (-not (Test-Path -LiteralPath $addedStatusFile)) `
+        -Message "Selected repair did not remove the locally added file."
+
+    Assert-Equal `
+        -Expected $repairLockBefore `
+        -Actual (Get-Content -LiteralPath $repairLockPath -Raw) `
+        -Message "Repair unexpectedly rewrote selibs.lock.json."
+
+    $repairedLock = Get-Content -LiteralPath $repairLockPath -Raw |
+        ConvertFrom-Json
+
+    $repairedDrift = Get-SELibsManagedPackageDrift `
+        -LibrariesRoot (Join-Path `
+            $updateModifiedRoot `
+            "Data\Scripts\UpdateModifiedMod\Libraries") `
+        -PackageId "Test.Root" `
+        -LockEntry $repairedLock.packages."Test.Root"
+
+    Assert-True `
+        -Condition (-not [bool]$repairedDrift.HasChanges) `
+        -Message "Selected repair did not restore the package to its lock."
+
+    $dependencyRepairFile = Join-Path `
+        $updateModifiedRoot `
+        "Data\Scripts\UpdateModifiedMod\Libraries\Test.Dependency\Test.Dependency.cs"
+
+    [System.IO.File]::AppendAllText(
+        $dependencyRepairFile,
+        "// local dependency edit`n",
+        $script:Utf8NoBom
+    )
+
+    $repairAllOutput = @(
+        Invoke-SELibsRepair `
+            -ModRoot $updateModifiedRoot `
+            -Force
+    )
+
+    Assert-True `
+        -Condition (
+            $repairAllOutput -contains "  Restore Test.Dependency 1.0.0"
+        ) `
+        -Message "Repair-all did not plan the drifted transitive package."
+
+    Assert-True `
+        -Condition (
+            $repairAllOutput -contains "Repaired Test.Dependency 1.0.0."
+        ) `
+        -Message "Repair-all did not restore the drifted transitive package."
+
+    Assert-Equal `
+        -Expected "// dependency`n" `
+        -Actual ([System.IO.File]::ReadAllText($dependencyRepairFile)) `
+        -Message "Repair-all did not restore the transitive package source."
+
+    Assert-Equal `
+        -Expected $repairLockBefore `
+        -Actual (Get-Content -LiteralPath $repairLockPath -Raw) `
+        -Message "Repair-all unexpectedly rewrote selibs.lock.json."
+
+    [System.IO.File]::AppendAllText(
+        $dependencyRepairFile,
+        "// local CLI repair edit`n",
+        $script:Utf8NoBom
+    )
+
+    $cliRepairOutput = @(
+        & (Join-Path $repoRoot "selibs.ps1") `
+            repair `
+            "Test.Dependency" `
+            -ModRoot $updateModifiedRoot `
+            -Force
+    )
+
+    Assert-True `
+        -Condition (
+            $cliRepairOutput -contains "Repaired Test.Dependency 1.0.0."
+        ) `
+        -Message "The CLI repair command did not restore the selected package."
+
+    Assert-Equal `
+        -Expected "// dependency`n" `
+        -Actual ([System.IO.File]::ReadAllText($dependencyRepairFile)) `
+        -Message "The CLI repair command did not restore package source."
+
+    [System.IO.File]::AppendAllText(
+        $dependencyRepairFile,
+        "// local edit before mismatched repair`n",
+        $script:Utf8NoBom
+    )
+
+    $dependencyReleaseRoot = Join-Path `
+        $catalog `
+        "Test.Dependency\1.0.0"
+
+    Remove-Item `
+        -LiteralPath $dependencyReleaseRoot `
+        -Recurse `
+        -Force
+
+    New-TestPackageRelease `
+        -CatalogRoot $catalog `
+        -Id "Test.Dependency" `
+        -Version "1.0.0" `
+        -Folders @("Test.Dependency") `
+        -Dependencies @{} `
+        -FileText "// republished dependency" |
+        Out-Null
+
+    Assert-Throws `
+        -Action {
+            Invoke-SELibsRepair `
+                -ModRoot $updateModifiedRoot `
+                -PackageId "Test.Dependency" `
+                -Force |
+                Out-Null
+        } `
+        -ExpectedMessagePart "does not match selibs.lock.json"
+
+    Assert-True `
+        -Condition (
+            [System.IO.File]::ReadAllText($dependencyRepairFile) -like
+            "*// local edit before mismatched repair*"
+        ) `
+        -Message "A rejected mismatched repair lost the local package edit."
+
+    Assert-Equal `
+        -Expected $repairLockBefore `
+        -Actual (Get-Content -LiteralPath $repairLockPath -Raw) `
+        -Message "A rejected mismatched repair rewrote selibs.lock.json."
+
+    Assert-True `
+        -Condition (-not (Test-Path -LiteralPath (
+            Join-Path $updateModifiedRoot ".selibs\tmp"
+        ))) `
+        -Message "A rejected mismatched repair left transaction files behind."
+
+    Remove-Item `
+        -LiteralPath $dependencyReleaseRoot `
+        -Recurse `
+        -Force
+
+    New-TestPackageRelease `
+        -CatalogRoot $catalog `
+        -Id "Test.Dependency" `
+        -Version "1.0.0" `
+        -Folders @("Test.Dependency") `
+        -Dependencies @{} `
+        -FileText "// dependency" |
+        Out-Null
+
     $badRoot = Join-Path $testRoot "BadHashMod"
 
     New-Item `
