@@ -90,6 +90,22 @@ that are no longer reachable from another direct dependency. Before deleting
 owned folders, SELibs verifies that the recorded files have not been added,
 removed, or modified.
 
+## Managed-package repair
+
+`selibs status` reports exact added, missing, and checksum-modified managed
+paths when installed package content differs from `selibs.lock.json`.
+
+`selibs repair Package.Id` restores one drifted package to the exact version and
+source route recorded in the lock. `selibs repair` restores every drifted locked
+package. Repair displays a plan and asks for confirmation; `-Force` accepts that
+plan without prompting.
+
+Repair stages the locked release first, verifies its component checksum, then
+verifies the extracted managed files against the existing lock hashes before
+replacing installed folders. A mismatched or republished release is rejected
+before installed package files are touched. Repair does not rewrite the project
+manifest or lock file.
+
 ## Updates
 
 `selibs update` selects the newest stable release of every direct dependency,
