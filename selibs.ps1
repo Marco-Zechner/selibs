@@ -9,6 +9,7 @@ param(
         "changelog",
         "status",
         "update",
+        "repair",
         "remove"
     )]
     [string]$Command = "help",
@@ -359,6 +360,8 @@ function Show-SELibsHelp {
     Write-Output "  selibs update"
     Write-Output "  selibs update Mz.ApiProtocol"
     Write-Output "  selibs update Mz.ApiProtocol@0.3.0"
+    Write-Output "  selibs repair"
+    Write-Output "  selibs repair Mz.ApiProtocol"
     Write-Output "  selibs remove Mz.ApiProtocol"
     Write-Output ""
     Write-Output "Commands:"
@@ -369,6 +372,9 @@ function Show-SELibsHelp {
     Write-Output "  status     Show installed, latest, and modified package state."
     Write-Output (
         "  update     Update one direct library, or all direct libraries."
+    )
+    Write-Output (
+        "  repair     Restore modified managed files to their locked release."
     )
     Write-Output "  remove  Remove a direct library and unused dependencies."
     Write-Output "  help    Show this help."
@@ -422,6 +428,13 @@ if ($MyInvocation.InvocationName -ne ".") {
                 -ModRoot $ModRoot `
                 -PackageSpec $PackageSpec `
                 -RegistryUrl $RegistryUrl `
+                -Force:$Force
+        }
+
+        "repair" {
+            Invoke-SELibsRepair `
+                -ModRoot $ModRoot `
+                -PackageId $PackageSpec `
                 -Force:$Force
         }
 
