@@ -1365,7 +1365,7 @@ function Resolve-SELibsProjectGraph {
     return @($order)
 }
 
-function Test-SELibsManagedPackage {
+function Get-SELibsManagedPackageDrift {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
@@ -1387,6 +1387,7 @@ function Test-SELibsManagedPackage {
     }
 
     $actualFiles = @{}
+    $missingFolders = New-Object System.Collections.ArrayList
     $rootPrefix = (
         [System.IO.Path]::GetFullPath($LibrariesRoot)
     ).TrimEnd([char[]]"\/") + [System.IO.Path]::DirectorySeparatorChar
@@ -1404,9 +1405,8 @@ function Test-SELibsManagedPackage {
         $folderPath = Join-Path $LibrariesRoot $folder
 
         if (-not (Test-Path -LiteralPath $folderPath -PathType Container)) {
-            throw (
-                "Managed package '$PackageId' is missing folder '$folder'."
-            )
+            [void]$missingFolders.Add($folder)
+            continue
         }
 
         foreach (
@@ -1423,19 +1423,23 @@ function Test-SELibsManagedPackage {
         }
     }
 
-    if ($actualFiles.Count -ne $expectedFiles.Count) {
-        throw (
-            "Managed package '$PackageId' has added or removed files. " +
-            "Restore it before changing dependencies."
-        )
-    }
+    $added = @(
+        $actualFiles.Keys |
+            Where-Object { -not $expectedFiles.ContainsKey($_) } |
+            Sort-Object
+    )
 
-    foreach ($relativePath in $expectedFiles.Keys) {
+    $missing = @(
+        $expectedFiles.Keys |
+            Where-Object { -not $actualFiles.ContainsKey($_) } |
+            Sort-Object
+    )
+
+    $modified = New-Object System.Collections.ArrayList
+
+    foreach ($relativePath in @($expectedFiles.Keys | Sort-Object)) {
         if (-not $actualFiles.ContainsKey($relativePath)) {
-            throw (
-                "Managed package '$PackageId' is missing file " +
-                "'$relativePath'."
-            )
+            continue
         }
 
         $actualHash = (
@@ -1445,14 +1449,69 @@ function Test-SELibsManagedPackage {
         ).Hash.ToLowerInvariant()
 
         if ($actualHash -ne $expectedFiles[$relativePath]) {
-            throw (
-                "Managed package '$PackageId' has modified file " +
-                "'$relativePath'."
-            )
+            [void]$modified.Add($relativePath)
         }
+    }
+
+    $sortedMissingFolders = @($missingFolders | Sort-Object)
+
+    return [pscustomobject]@{
+        Added = @($added)
+        Missing = @($missing)
+        Modified = @($modified)
+        MissingFolders = $sortedMissingFolders
+        HasChanges = (
+            $added.Count -gt 0 -or
+            $missing.Count -gt 0 -or
+            $modified.Count -gt 0 -or
+            $sortedMissingFolders.Count -gt 0
+        )
     }
 }
 
+function Test-SELibsManagedPackage {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$LibrariesRoot,
+
+        [Parameter(Mandatory = $true)]
+        [string]$PackageId,
+
+        [Parameter(Mandatory = $true)]
+        [object]$LockEntry
+    )
+
+    $drift = Get-SELibsManagedPackageDrift `
+        -LibrariesRoot $LibrariesRoot `
+        -PackageId $PackageId `
+        -LockEntry $LockEntry
+
+    if (-not $drift.HasChanges) {
+        return
+    }
+
+    if ($drift.MissingFolders.Count -gt 0) {
+        throw (
+            "Managed package '$PackageId' is missing folder " +
+            "'$($drift.MissingFolders[0])'."
+        )
+    }
+
+    if ($drift.Modified.Count -gt 0) {
+        throw (
+            "Managed package '$PackageId' has modified file " +
+            "'$($drift.Modified[0])'."
+        )
+    }
+
+    if ($drift.Added.Count -gt 0 -or $drift.Missing.Count -gt 0) {
+        throw (
+            "Managed package '$PackageId' has added or removed files. " +
+            "Restore it before changing dependencies."
+        )
+    }
+}
 function Test-SELibsFolderClaims {
     [CmdletBinding()]
     param(
@@ -1845,6 +1904,7 @@ function Invoke-SELibsStatus {
     $updateCount = 0
     $modifiedCount = 0
     $rows = New-Object System.Collections.ArrayList
+    $driftByPackage = [ordered]@{}
 
     foreach ($property in $packageProperties) {
         $packageId = [string]$property.Name
@@ -1861,16 +1921,15 @@ function Invoke-SELibsStatus {
         }
 
         $statusParts = New-Object System.Collections.ArrayList
+        $drift = Get-SELibsManagedPackageDrift `
+            -LibrariesRoot $resolvedLibraries.FullPath `
+            -PackageId $packageId `
+            -LockEntry $entry
 
-        try {
-            Test-SELibsManagedPackage `
-                -LibrariesRoot $resolvedLibraries.FullPath `
-                -PackageId $packageId `
-                -LockEntry $entry
-        }
-        catch {
+        if ($drift.HasChanges) {
             [void]$statusParts.Add("modified")
             $modifiedCount++
+            $driftByPackage[$packageId] = $drift
         }
 
         $latestText = "unknown"
@@ -1928,6 +1987,31 @@ function Invoke-SELibsStatus {
         ForEach-Object {
             Write-Output $_
         }
+
+    if ($driftByPackage.Count -gt 0) {
+        Write-Output "Managed package changes:"
+
+        foreach ($packageId in $driftByPackage.Keys) {
+            $drift = $driftByPackage[$packageId]
+            Write-Output "  ${packageId}:"
+
+            foreach ($folder in $drift.MissingFolders) {
+                Write-Output "    missing folder: $folder"
+            }
+
+            foreach ($relativePath in $drift.Added) {
+                Write-Output "    added: $relativePath"
+            }
+
+            foreach ($relativePath in $drift.Missing) {
+                Write-Output "    missing: $relativePath"
+            }
+
+            foreach ($relativePath in $drift.Modified) {
+                Write-Output "    modified: $relativePath"
+            }
+        }
+    }
 
     Write-Output (
         "Summary: $($packageProperties.Count) packages installed; " +

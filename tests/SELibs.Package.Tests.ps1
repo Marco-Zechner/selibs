@@ -1158,6 +1158,22 @@ try {
         $script:Utf8NoBom
     )
 
+    $missingStatusFile = Join-Path `
+        $updateModifiedRoot `
+        "Data\Scripts\UpdateModifiedMod\Libraries\Test.Root.Game\Test.Root.Game.cs"
+
+    Remove-Item -LiteralPath $missingStatusFile
+
+    $addedStatusFile = Join-Path `
+        $updateModifiedRoot `
+        "Data\Scripts\UpdateModifiedMod\Libraries\Test.Root.Core\LocalOnly.cs"
+
+    [System.IO.File]::WriteAllText(
+        $addedStatusFile,
+        "// local-only file`n",
+        $script:Utf8NoBom
+    )
+
     $modifiedStatusOutput = @(
         Invoke-SELibsStatus `
             -ModRoot $updateModifiedRoot `
@@ -1181,6 +1197,42 @@ try {
             )
         ) `
         -Message "Status produced the wrong modified-package summary."
+
+    Assert-True `
+        -Condition (
+            $modifiedStatusOutput -contains "Managed package changes:"
+        ) `
+        -Message "Status did not introduce detailed managed-package changes."
+
+    Assert-True `
+        -Condition (
+            $modifiedStatusOutput -contains "  Test.Root:"
+        ) `
+        -Message "Status did not identify the package containing local changes."
+
+    Assert-True `
+        -Condition (
+            $modifiedStatusOutput -contains (
+                "    added: Test.Root.Core/LocalOnly.cs"
+            )
+        ) `
+        -Message "Status did not report the locally added managed file."
+
+    Assert-True `
+        -Condition (
+            $modifiedStatusOutput -contains (
+                "    missing: Test.Root.Game/Test.Root.Game.cs"
+            )
+        ) `
+        -Message "Status did not report the missing managed file."
+
+    Assert-True `
+        -Condition (
+            $modifiedStatusOutput -contains (
+                "    modified: Test.Root.Core/Test.Root.Core.cs"
+            )
+        ) `
+        -Message "Status did not report the checksum-modified managed file."
 
     Assert-Throws `
         -Action {
