@@ -1,22 +1,42 @@
 # SELibs package format
 
-The central registry routes a package ID to its publishing location. It does
-not list package versions or dependencies.
+The central registry lists repositories that publish SELibs packages. Package
+IDs and versions are discovered from their published GitHub Releases.
 
-## Central routing entry
+## Central registry
 
-A GitHub-hosted package uses:
+The production registry uses schema version 2:
 
     {
-      "provider": "github",
-      "repository": "Author/repository",
-      "releasePrefix": "release/Package.Id/"
+      "schemaVersion": 2,
+      "repositories": [
+        {
+          "provider": "github",
+          "repository": "Author/repository"
+        }
+      ]
     }
 
-For example, version `2.1.0` is discovered from the release tag
-`release/Package.Id/2.1.0`.
+A repository can publish any number of packages. SELibs discovers stable,
+non-draft GitHub Releases whose tags use:
 
-The `filesystem` provider exists for deterministic local testing.
+    release/Package.Id/2.1.0
+
+The release must contain the matching package manifest asset:
+
+    Package.Id-2.1.0-package.json
+
+From that release SELibs derives the package route automatically, so publishing
+another package in an already registered repository does not require another
+central-registry entry.
+
+Package IDs discovered from different repositories must be unique
+case-insensitively. SELibs rejects an ambiguous registry instead of choosing
+one repository implicitly.
+
+Schema-version-1 registries with explicit package routes remain supported for
+custom and legacy registries. The `filesystem` provider is also retained there
+for deterministic local testing.
 
 ## Release assets
 

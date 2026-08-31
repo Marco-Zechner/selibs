@@ -1,35 +1,17 @@
 {
-  "schemaVersion": 1,
-  "packages": {
-    "Mz.ApiProtocol": {
+  "schemaVersion": 2,
+  "repositories": [
+    {
       "provider": "github",
-      "repository": "Marco-Zechner/space-engineers-mod-libraries",
-      "releasePrefix": "release/Mz.ApiProtocol/"
+      "repository": "Marco-Zechner/space-engineers-mod-libraries"
     },
-    "Mz.CommandAPI.Consumer": {
+    {
       "provider": "github",
-      "repository": "Marco-Zechner/SE-CommandAPI",
-      "releasePrefix": "release/Mz.CommandAPI.Consumer/"
+      "repository": "Marco-Zechner/SE-CommandAPI"
     },
-    "Mz.RichHudChatAPI.Consumer": {
+    {
       "provider": "github",
-      "repository": "Marco-Zechner/SE-RichHudChatAPI",
-      "releasePrefix": "release/Mz.RichHudChatAPI.Consumer/"
-    },
-    "Mz.Logging": {
-      "provider": "github",
-      "repository": "Marco-Zechner/space-engineers-mod-libraries",
-      "releasePrefix": "release/Mz.Logging/"
-    },
-    "Mz.Networking": {
-      "provider": "github",
-      "repository": "Marco-Zechner/space-engineers-mod-libraries",
-      "releasePrefix": "release/Mz.Networking/"
-    },
-    "Mz.SemanticVersioning": {
-      "provider": "github",
-      "repository": "Marco-Zechner/space-engineers-mod-libraries",
-      "releasePrefix": "release/Mz.SemanticVersioning/"
+      "repository": "Marco-Zechner/SE-RichHudChatAPI"
     }
-  }
+  ]
 }
