@@ -308,6 +308,238 @@ $testRoot = Join-Path `
 New-Item -ItemType Directory -Path $testRoot | Out-Null
 
 try {
+    $discoveryRegistryPath = Join-Path $testRoot "registry-v2.json"
+
+    Write-TestJson `
+        -Path $discoveryRegistryPath `
+        -Value ([ordered]@{
+            schemaVersion = 2
+            repositories = @(
+                [ordered]@{
+                    provider = "github"
+                    repository = "owner/discovery"
+                }
+            )
+        })
+
+    $script:DiscoveryApiUris = New-Object System.Collections.ArrayList
+
+    try {
+        Set-Item `
+            -Path Function:\Invoke-SELibsGitHubApi `
+            -Value {
+                param(
+                    [Parameter(Mandatory = $true)]
+                    [string]$Uri
+                )
+
+                [void]$script:DiscoveryApiUris.Add($Uri)
+
+                if ($Uri -eq "https://api.github.com/repos/owner/discovery/releases?per_page=100&page=1") {
+                    $page = New-Object System.Collections.ArrayList
+
+                    [void]$page.Add([pscustomobject]@{
+                        tag_name = "release/Test.One/1.0.0"
+                        draft = $false
+                        prerelease = $false
+                        assets = @(
+                            [pscustomobject]@{
+                                name = "Test.One-1.0.0-package.json"
+                                browser_download_url = "https://example/Test.One-1.0.0.json"
+                            }
+                        )
+                    })
+
+                    [void]$page.Add([pscustomobject]@{
+                        tag_name = "release/Test.Other/1.5.0"
+                        draft = $false
+                        prerelease = $false
+                        assets = @(
+                            [pscustomobject]@{
+                                name = "Test.Other-1.5.0-package.json"
+                                browser_download_url = "https://example/Test.Other-1.5.0.json"
+                            }
+                        )
+                    })
+
+                    [void]$page.Add([pscustomobject]@{
+                        tag_name = "release/Test.Hidden/9.0.0"
+                        draft = $false
+                        prerelease = $true
+                        assets = @()
+                    })
+
+                    [void]$page.Add([pscustomobject]@{
+                        tag_name = "release/Test.Draft/9.0.0"
+                        draft = $true
+                        prerelease = $false
+                        assets = @()
+                    })
+
+                    [void]$page.Add([pscustomobject]@{
+                        tag_name = "release/Test.NoManifest/1.0.0"
+                        draft = $false
+                        prerelease = $false
+                        assets = @()
+                    })
+
+                    for ($index = 0; $index -lt 95; $index++) {
+                        [void]$page.Add([pscustomobject]@{
+                            tag_name = "unrelated/$index"
+                            draft = $false
+                            prerelease = $false
+                            assets = @()
+                        })
+                    }
+
+                    return ,@($page)
+                }
+
+                if ($Uri -eq "https://api.github.com/repos/owner/discovery/releases?per_page=100&page=2") {
+                    return ,@(
+                        [pscustomobject]@{
+                            tag_name = "release/Test.PageTwo/2.0.0"
+                            draft = $false
+                            prerelease = $false
+                            assets = @(
+                                [pscustomobject]@{
+                                    name = "Test.PageTwo-2.0.0-package.json"
+                                    browser_download_url = "https://example/Test.PageTwo-2.0.0.json"
+                                }
+                            )
+                        }
+                    )
+                }
+
+                if ($Uri -eq "https://api.github.com/repos/owner/first/releases?per_page=100&page=1") {
+                    return ,@(
+                        [pscustomobject]@{
+                            tag_name = "release/Test.Duplicate/1.0.0"
+                            draft = $false
+                            prerelease = $false
+                            assets = @(
+                                [pscustomobject]@{
+                                    name = "Test.Duplicate-1.0.0-package.json"
+                                    browser_download_url = "https://example/Test.Duplicate-1.0.0.json"
+                                }
+                            )
+                        }
+                    )
+                }
+
+                if ($Uri -eq "https://api.github.com/repos/owner/second/releases?per_page=100&page=1") {
+                    return ,@(
+                        [pscustomobject]@{
+                            tag_name = "release/test.duplicate/2.0.0"
+                            draft = $false
+                            prerelease = $false
+                            assets = @(
+                                [pscustomobject]@{
+                                    name = "test.duplicate-2.0.0-package.json"
+                                    browser_download_url = "https://example/test.duplicate-2.0.0.json"
+                                }
+                            )
+                        }
+                    )
+                }
+
+                throw "Unexpected GitHub test URI '$Uri'."
+            }
+
+        $discoveredRegistry = Read-SELibsRegistry `
+            -RegistryUrl $discoveryRegistryPath
+
+        Assert-Equal `
+            -Expected 2 `
+            -Actual $discoveredRegistry.Value.schemaVersion `
+            -Message "Repository registry did not preserve schema version 2."
+
+        Assert-Equal `
+            -Expected 3 `
+            -Actual @(
+                $discoveredRegistry.Value.packages.PSObject.Properties
+            ).Count `
+            -Message "Repository discovery produced the wrong package count."
+
+        $oneRoute = Get-SELibsPackageRoute `
+            -Registry $discoveredRegistry `
+            -PackageId "test.one"
+
+        Assert-Equal `
+            -Expected "github" `
+            -Actual ([string]$oneRoute.provider) `
+            -Message "Discovered route uses the wrong provider."
+
+        Assert-Equal `
+            -Expected "owner/discovery" `
+            -Actual ([string]$oneRoute.repository) `
+            -Message "Discovered route uses the wrong repository."
+
+        Assert-Equal `
+            -Expected "release/Test.One/" `
+            -Actual ([string]$oneRoute.releasePrefix) `
+            -Message "Discovered route uses the wrong release prefix."
+
+        $pageTwoRoute = Get-SELibsPackageRoute `
+            -Registry $discoveredRegistry `
+            -PackageId "Test.PageTwo"
+
+        Assert-Equal `
+            -Expected "owner/discovery" `
+            -Actual ([string]$pageTwoRoute.repository) `
+            -Message "Repository discovery did not read the second release page."
+
+        $latestOne = Get-SELibsGitHubRelease `
+            -PackageId "Test.One" `
+            -Route $oneRoute
+
+        Assert-Equal `
+            -Expected "1.0.0" `
+            -Actual ([string]$latestOne.Version) `
+            -Message "Cached discovery releases selected the wrong package version."
+
+        Assert-Equal `
+            -Expected "https://example/Test.One-1.0.0.json" `
+            -Actual ([string]$latestOne.ManifestSource) `
+            -Message "Cached discovery releases selected the wrong manifest."
+
+        Assert-Equal `
+            -Expected 2 `
+            -Actual $script:DiscoveryApiUris.Count `
+            -Message "Latest resolution queried a repository already cached by discovery."
+
+        $collisionRegistryPath = Join-Path $testRoot "registry-v2-collision.json"
+
+        Write-TestJson `
+            -Path $collisionRegistryPath `
+            -Value ([ordered]@{
+                schemaVersion = 2
+                repositories = @(
+                    [ordered]@{
+                        provider = "github"
+                        repository = "owner/first"
+                    }
+                    [ordered]@{
+                        provider = "github"
+                        repository = "owner/second"
+                    }
+                )
+            })
+
+        Assert-Throws `
+            -Action {
+                Read-SELibsRegistry `
+                    -RegistryUrl $collisionRegistryPath |
+                    Out-Null
+            } `
+            -ExpectedMessagePart "discovered from more than one repository"
+    }
+    finally {
+        Set-Item `
+            -Path Function:\Invoke-SELibsGitHubApi `
+            -Value $originalGitHubApi
+    }
+
     $catalog = Join-Path $testRoot "catalog"
 
     New-TestPackageRelease `
