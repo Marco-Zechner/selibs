@@ -276,7 +276,9 @@ function ConvertTo-SELibsDiscoveredRegistry {
         [string]$Source
     )
 
-    if ($null -eq $Registry.repositories) {
+    $repositoriesProperty = $Registry.PSObject.Properties["repositories"]
+
+    if ($null -eq $repositoriesProperty) {
         throw "Registry '$Source' does not define repositories."
     }
 
@@ -284,7 +286,7 @@ function ConvertTo-SELibsDiscoveredRegistry {
     $routeRepositories = @{}
     $seenRepositories = @{}
 
-    foreach ($entry in @($Registry.repositories)) {
+    foreach ($entry in @($repositoriesProperty.Value)) {
         $provider = [string]$entry.provider
         $repository = [string]$entry.repository
 
@@ -336,6 +338,80 @@ function ConvertTo-SELibsDiscoveredRegistry {
 
     return [pscustomobject]@{
         schemaVersion = 2
+        packages = $packages
+    }
+}
+
+function ConvertTo-SELibsHybridRegistry {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Registry,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Source
+    )
+
+    $routes = @{}
+
+    foreach ($property in @($Registry.packages.PSObject.Properties)) {
+        $routes[[string]$property.Name] = $property.Value
+    }
+
+    $discoveredRegistry = ConvertTo-SELibsDiscoveredRegistry `
+        -Registry $Registry `
+        -Source $Source
+
+    foreach ($property in @($discoveredRegistry.packages.PSObject.Properties)) {
+        $packageId = [string]$property.Name
+        $discoveredRoute = $property.Value
+
+        if ($routes.ContainsKey($packageId)) {
+            $explicitRoute = $routes[$packageId]
+            $explicitProvider = [string]$explicitRoute.provider
+            $explicitRepository = [string]$explicitRoute.repository
+            $explicitPrefix = [string]$explicitRoute.releasePrefix
+            $discoveredRepository = [string]$discoveredRoute.repository
+            $discoveredPrefix = [string]$discoveredRoute.releasePrefix
+
+            $providerMatches = $explicitProvider.Equals(
+                "github",
+                [System.StringComparison]::OrdinalIgnoreCase
+            )
+            $repositoryMatches = $explicitRepository.Equals(
+                $discoveredRepository,
+                [System.StringComparison]::OrdinalIgnoreCase
+            )
+            $prefixMatches = $explicitPrefix.Equals(
+                $discoveredPrefix,
+                [System.StringComparison]::Ordinal
+            )
+
+            if (-not ($providerMatches -and $repositoryMatches -and $prefixMatches)) {
+                throw (
+                    "Explicit route for package '$packageId' does not match " +
+                    "repository discovery from '$discoveredRepository'."
+                )
+            }
+        }
+
+        # Prefer the discovered route so repository release enumeration can be
+        # reused by later latest-version lookups in this invocation.
+        $routes[$packageId] = $discoveredRoute
+    }
+
+    $packages = New-Object PSObject
+
+    foreach ($packageId in @($routes.Keys | Sort-Object)) {
+        Add-Member `
+            -InputObject $packages `
+            -MemberType NoteProperty `
+            -Name $packageId `
+            -Value $routes[$packageId]
+    }
+
+    return [pscustomobject]@{
+        schemaVersion = 1
         packages = $packages
     }
 }
@@ -500,9 +576,20 @@ function Read-SELibsRegistry {
             throw "Registry '$source' does not define packages."
         }
 
+        $repositoriesProperty = $registry.PSObject.Properties["repositories"]
+
+        if ($null -eq $repositoriesProperty) {
+            return [pscustomobject]@{
+                Source = $source
+                Value = $registry
+            }
+        }
+
         return [pscustomobject]@{
             Source = $source
-            Value = $registry
+            Value = ConvertTo-SELibsHybridRegistry `
+                -Registry $registry `
+                -Source $source
         }
     }
 

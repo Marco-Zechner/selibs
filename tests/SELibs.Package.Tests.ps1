@@ -540,6 +540,135 @@ try {
             -Value $originalGitHubApi
     }
 
+    $hybridRegistryPath = Join-Path $testRoot "registry-v1-hybrid.json"
+
+    Write-TestJson `
+        -Path $hybridRegistryPath `
+        -Value ([ordered]@{
+            schemaVersion = 1
+            packages = [ordered]@{
+                "Test.Legacy" = [ordered]@{
+                    provider = "github"
+                    repository = "owner/hybrid"
+                    releasePrefix = "release/Test.Legacy/"
+                }
+            }
+            repositories = @(
+                [ordered]@{
+                    provider = "github"
+                    repository = "owner/hybrid"
+                }
+            )
+        })
+
+    try {
+        Set-Item `
+            -Path Function:\Invoke-SELibsGitHubApi `
+            -Value {
+                param(
+                    [Parameter(Mandatory = $true)]
+                    [string]$Uri
+                )
+
+                if ($Uri -ne "https://api.github.com/repos/owner/hybrid/releases?per_page=100&page=1") {
+                    throw "Unexpected GitHub hybrid-registry URI '$Uri'."
+                }
+
+                return ,@(
+                    [pscustomobject]@{
+                        tag_name = "release/Test.Legacy/1.0.0"
+                        draft = $false
+                        prerelease = $false
+                        assets = @(
+                            [pscustomobject]@{
+                                name = "Test.Legacy-1.0.0-package.json"
+                                browser_download_url = "https://example/Test.Legacy-1.0.0.json"
+                            }
+                        )
+                    }
+                    [pscustomobject]@{
+                        tag_name = "release/Test.New/1.0.0"
+                        draft = $false
+                        prerelease = $false
+                        assets = @(
+                            [pscustomobject]@{
+                                name = "Test.New-1.0.0-package.json"
+                                browser_download_url = "https://example/Test.New-1.0.0.json"
+                            }
+                        )
+                    }
+                )
+            }
+
+        $hybridRegistry = Read-SELibsRegistry `
+            -RegistryUrl $hybridRegistryPath
+
+        Assert-Equal `
+            -Expected 1 `
+            -Actual $hybridRegistry.Value.schemaVersion `
+            -Message "Hybrid registry did not remain schema version 1."
+
+        Assert-Equal `
+            -Expected 2 `
+            -Actual @(
+                $hybridRegistry.Value.packages.PSObject.Properties
+            ).Count `
+            -Message "Hybrid registry did not combine explicit and discovered packages."
+
+        $legacyRoute = Get-SELibsPackageRoute `
+            -Registry $hybridRegistry `
+            -PackageId "Test.Legacy"
+
+        Assert-True `
+            -Condition (
+                $null -ne $legacyRoute.PSObject.Properties["discoveredReleases"]
+            ) `
+            -Message "Explicit compatibility route did not reuse discovery metadata."
+
+        $newRoute = Get-SELibsPackageRoute `
+            -Registry $hybridRegistry `
+            -PackageId "test.new"
+
+        Assert-Equal `
+            -Expected "owner/hybrid" `
+            -Actual ([string]$newRoute.repository) `
+            -Message "Hybrid registry did not expose the newly discovered package."
+
+        $mismatchRegistryPath = Join-Path $testRoot "registry-v1-hybrid-mismatch.json"
+
+        Write-TestJson `
+            -Path $mismatchRegistryPath `
+            -Value ([ordered]@{
+                schemaVersion = 1
+                packages = [ordered]@{
+                    "Test.Legacy" = [ordered]@{
+                        provider = "github"
+                        repository = "owner/wrong"
+                        releasePrefix = "release/Test.Legacy/"
+                    }
+                }
+                repositories = @(
+                    [ordered]@{
+                        provider = "github"
+                        repository = "owner/hybrid"
+                    }
+                )
+            })
+
+        Assert-Throws `
+            -Action {
+                Read-SELibsRegistry `
+                    -RegistryUrl $mismatchRegistryPath |
+                    Out-Null
+            } `
+            -ExpectedMessagePart "does not match repository discovery"
+    }
+    finally {
+        Set-Item `
+            -Path Function:\Invoke-SELibsGitHubApi `
+            -Value $originalGitHubApi
+    }
+
     $catalog = Join-Path $testRoot "catalog"
 
     New-TestPackageRelease `

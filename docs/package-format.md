@@ -1,14 +1,23 @@
 # SELibs package format
 
-The central registry lists repositories that publish SELibs packages. Package
-IDs and versions are discovered from their published GitHub Releases.
+The central registry lists repositories that publish SELibs packages. Current
+clients discover package IDs and versions from their published GitHub Releases.
 
 ## Central registry
 
-The production registry uses schema version 2:
+The production registry remains schema version 1 for compatibility with older
+installed SELibs clients. Its explicit `packages` map contains the established
+fallback routes, while current clients additionally read `repositories`:
 
     {
-      "schemaVersion": 2,
+      "schemaVersion": 1,
+      "packages": {
+        "Existing.Package": {
+          "provider": "github",
+          "repository": "Author/repository",
+          "releasePrefix": "release/Existing.Package/"
+        }
+      },
       "repositories": [
         {
           "provider": "github",
@@ -17,8 +26,9 @@ The production registry uses schema version 2:
       ]
     }
 
-A repository can publish any number of packages. SELibs discovers stable,
-non-draft GitHub Releases whose tags use:
+Older clients ignore the additional `repositories` property and continue using
+the explicit package routes. Current clients augment those routes by discovering
+stable, non-draft GitHub Releases whose tags use:
 
     release/Package.Id/2.1.0
 
@@ -26,17 +36,18 @@ The release must contain the matching package manifest asset:
 
     Package.Id-2.1.0-package.json
 
-From that release SELibs derives the package route automatically, so publishing
-another package in an already registered repository does not require another
-central-registry entry.
+A repository can publish any number of packages. Once a repository is listed,
+publishing another package there does not require another explicit central
+registry entry. Existing explicit routes that are also discovered must agree
+with the discovered repository and release prefix.
 
 Package IDs discovered from different repositories must be unique
 case-insensitively. SELibs rejects an ambiguous registry instead of choosing
 one repository implicitly.
 
-Schema-version-1 registries with explicit package routes remain supported for
-custom and legacy registries. The `filesystem` provider is also retained there
-for deterministic local testing.
+Repository-only schema-version-2 registries are also supported by current
+clients. Schema-version-1 explicit registries and the `filesystem` provider
+remain supported for deterministic local testing.
 
 ## Release assets
 

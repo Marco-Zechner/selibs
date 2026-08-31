@@ -386,9 +386,9 @@ try {
         ConvertFrom-Json
 
     Assert-Equal `
-        -Expected 2 `
+        -Expected 1 `
         -Actual $productionRegistry.schemaVersion `
-        -Message "Production registry does not use repository discovery."
+        -Message "Production registry does not preserve legacy schema compatibility."
 
     $expectedRepositories = @(
         "Marco-Zechner/space-engineers-mod-libraries"
@@ -412,12 +412,34 @@ try {
             -Message "Production registry omits repository '$repository'."
     }
 
-    foreach ($entry in @($productionRegistry.repositories)) {
-        Assert-Equal `
-            -Expected "github" `
-            -Actual ([string]$entry.provider) `
-            -Message "Production registry contains a non-GitHub provider."
+    $expectedFallbackPackages = @(
+        "Mz.ApiProtocol"
+        "Mz.CommandAPI.Consumer"
+        "Mz.Logging"
+        "Mz.Networking"
+        "Mz.RichHudChatAPI.Consumer"
+        "Mz.SemanticVersioning"
+    )
+
+    $fallbackPackages = @(
+        $productionRegistry.packages.PSObject.Properties |
+            ForEach-Object { [string]$_.Name }
+    )
+
+    Assert-Equal `
+        -Expected $expectedFallbackPackages.Count `
+        -Actual $fallbackPackages.Count `
+        -Message "Production registry contains the wrong compatibility package count."
+
+    foreach ($packageId in $expectedFallbackPackages) {
+        Assert-True `
+            -Condition ($fallbackPackages -contains $packageId) `
+            -Message "Production registry omits compatibility package '$packageId'."
     }
+
+    Assert-True `
+        -Condition ($fallbackPackages -notcontains "Mz.TextTemplate") `
+        -Message "Mz.TextTemplate should be provided by dynamic discovery."
 
     Write-Output "OK SELibs tests passed: $script:Passed assertions"
 }
