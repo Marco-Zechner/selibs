@@ -31,5 +31,19 @@
       "repository": "Marco-Zechner/space-engineers-mod-libraries",
       "releasePrefix": "release/Mz.SemanticVersioning/"
     }
-  }
+  },
+  "repositories": [
+    {
+      "provider": "github",
+      "repository": "Marco-Zechner/space-engineers-mod-libraries"
+    },
+    {
+      "provider": "github",
+      "repository": "Marco-Zechner/SE-CommandAPI"
+    },
+    {
+      "provider": "github",
+      "repository": "Marco-Zechner/SE-RichHudChatAPI"
+    }
+  ]
 }

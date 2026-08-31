@@ -385,57 +385,61 @@ try {
         -Raw |
         ConvertFrom-Json
 
-    $expectedRoutes = [ordered]@{
-        "Mz.ApiProtocol" = [ordered]@{
-            repository = "Marco-Zechner/space-engineers-mod-libraries"
-            releasePrefix = "release/Mz.ApiProtocol/"
-        }
-        "Mz.CommandAPI.Consumer" = [ordered]@{
-            repository = "Marco-Zechner/SE-CommandAPI"
-            releasePrefix = "release/Mz.CommandAPI.Consumer/"
-        }
-        "Mz.RichHudChatAPI.Consumer" = [ordered]@{
-            repository = "Marco-Zechner/SE-RichHudChatAPI"
-            releasePrefix = "release/Mz.RichHudChatAPI.Consumer/"
-        }
-        "Mz.Logging" = [ordered]@{
-            repository = "Marco-Zechner/space-engineers-mod-libraries"
-            releasePrefix = "release/Mz.Logging/"
-        }
-        "Mz.Networking" = [ordered]@{
-            repository = "Marco-Zechner/space-engineers-mod-libraries"
-            releasePrefix = "release/Mz.Networking/"
-        }
-        "Mz.SemanticVersioning" = [ordered]@{
-            repository = "Marco-Zechner/space-engineers-mod-libraries"
-            releasePrefix = "release/Mz.SemanticVersioning/"
-        }
-    }
+    Assert-Equal `
+        -Expected 1 `
+        -Actual $productionRegistry.schemaVersion `
+        -Message "Production registry does not preserve legacy schema compatibility."
 
-    foreach ($entry in $expectedRoutes.GetEnumerator()) {
-        $routeProperty = `
-            $productionRegistry.packages.PSObject.Properties[$entry.Key]
+    $expectedRepositories = @(
+        "Marco-Zechner/space-engineers-mod-libraries"
+        "Marco-Zechner/SE-CommandAPI"
+        "Marco-Zechner/SE-RichHudChatAPI"
+    )
 
+    $productionRepositories = @(
+        $productionRegistry.repositories |
+            ForEach-Object { [string]$_.repository }
+    )
+
+    Assert-Equal `
+        -Expected $expectedRepositories.Count `
+        -Actual $productionRepositories.Count `
+        -Message "Production registry contains the wrong repository count."
+
+    foreach ($repository in $expectedRepositories) {
         Assert-True `
-            -Condition ($null -ne $routeProperty) `
-            -Message "Production registry omits package '$($entry.Key)'."
-
-        Assert-Equal `
-            -Expected ([string]$entry.Value.repository) `
-            -Actual ([string]$routeProperty.Value.repository) `
-            -Message (
-                "Production registry uses the wrong repository for " +
-                "'$($entry.Key)'."
-            )
-
-        Assert-Equal `
-            -Expected ([string]$entry.Value.releasePrefix) `
-            -Actual ([string]$routeProperty.Value.releasePrefix) `
-            -Message (
-                "Production registry uses the wrong release prefix for " +
-                "'$($entry.Key)'."
-            )
+            -Condition ($productionRepositories -contains $repository) `
+            -Message "Production registry omits repository '$repository'."
     }
+
+    $expectedFallbackPackages = @(
+        "Mz.ApiProtocol"
+        "Mz.CommandAPI.Consumer"
+        "Mz.Logging"
+        "Mz.Networking"
+        "Mz.RichHudChatAPI.Consumer"
+        "Mz.SemanticVersioning"
+    )
+
+    $fallbackPackages = @(
+        $productionRegistry.packages.PSObject.Properties |
+            ForEach-Object { [string]$_.Name }
+    )
+
+    Assert-Equal `
+        -Expected $expectedFallbackPackages.Count `
+        -Actual $fallbackPackages.Count `
+        -Message "Production registry contains the wrong compatibility package count."
+
+    foreach ($packageId in $expectedFallbackPackages) {
+        Assert-True `
+            -Condition ($fallbackPackages -contains $packageId) `
+            -Message "Production registry omits compatibility package '$packageId'."
+    }
+
+    Assert-True `
+        -Condition ($fallbackPackages -notcontains "Mz.TextTemplate") `
+        -Message "Mz.TextTemplate should be provided by dynamic discovery."
 
     Write-Output "OK SELibs tests passed: $script:Passed assertions"
 }

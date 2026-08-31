@@ -1,6 +1,6 @@
 # SELibs
 
-SELibs is a global source-library manager and package-routing registry for
+SELibs is a global source-library manager with repository-based package discovery for
 Space Engineers mods.
 
 ## Install
@@ -40,16 +40,22 @@ PowerShell without copying the manager into every mod.
 
 ## Browse available libraries
 
-Show every package exposed by the selected registry and its newest stable
+Show every package discovered through the selected registry and its newest stable
 release:
 
 ```shell
 selibs list
 ```
 
-The command is read-only. It reports every registry package, its newest stable
-numeric release, and its provider. A package is marked `unavailable` when its
-route cannot currently produce a supported release.
+The command is read-only. Repository registries discover packages from published
+GitHub Releases named `release/<Package.Id>/<version>`. It reports each discovered
+package, its newest stable numeric release, and its provider. A package is marked
+`unavailable` when its route cannot currently produce a supported release.
+
+The production registry retains explicit routes for the established packages so
+older installed SELibs versions continue to work. Current clients additionally
+discover packages from the registered repositories, so new libraries published
+there do not require another package-specific registry entry.
 
 Use `-RegistryUrl` to inspect another registry:
 
