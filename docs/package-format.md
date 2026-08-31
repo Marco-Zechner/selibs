@@ -1,22 +1,53 @@
 # SELibs package format
 
-The central registry routes a package ID to its publishing location. It does
-not list package versions or dependencies.
+The central registry lists repositories that publish SELibs packages. Current
+clients discover package IDs and versions from their published GitHub Releases.
 
-## Central routing entry
+## Central registry
 
-A GitHub-hosted package uses:
+The production registry remains schema version 1 for compatibility with older
+installed SELibs clients. Its explicit `packages` map contains the established
+fallback routes, while current clients additionally read `repositories`:
 
     {
-      "provider": "github",
-      "repository": "Author/repository",
-      "releasePrefix": "release/Package.Id/"
+      "schemaVersion": 1,
+      "packages": {
+        "Existing.Package": {
+          "provider": "github",
+          "repository": "Author/repository",
+          "releasePrefix": "release/Existing.Package/"
+        }
+      },
+      "repositories": [
+        {
+          "provider": "github",
+          "repository": "Author/repository"
+        }
+      ]
     }
 
-For example, version `2.1.0` is discovered from the release tag
-`release/Package.Id/2.1.0`.
+Older clients ignore the additional `repositories` property and continue using
+the explicit package routes. Current clients augment those routes by discovering
+stable, non-draft GitHub Releases whose tags use:
 
-The `filesystem` provider exists for deterministic local testing.
+    release/Package.Id/2.1.0
+
+The release must contain the matching package manifest asset:
+
+    Package.Id-2.1.0-package.json
+
+A repository can publish any number of packages. Once a repository is listed,
+publishing another package there does not require another explicit central
+registry entry. Existing explicit routes that are also discovered must agree
+with the discovered repository and release prefix.
+
+Package IDs discovered from different repositories must be unique
+case-insensitively. SELibs rejects an ambiguous registry instead of choosing
+one repository implicitly.
+
+Repository-only schema-version-2 registries are also supported by current
+clients. Schema-version-1 explicit registries and the `filesystem` provider
+remain supported for deterministic local testing.
 
 ## Release assets
 

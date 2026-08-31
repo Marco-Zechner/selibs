@@ -137,6 +137,285 @@ function Invoke-SELibsGitHubApi {
     }
 }
 
+function Get-SELibsGitHubRepositoryReleases {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Repository
+    )
+
+    if ($Repository -notmatch '^[^/]+/[^/]+$') {
+        throw "GitHub repository '$Repository' must use 'owner/name'."
+    }
+
+    $apiRoot = "https://api.github.com/repos/$Repository"
+    $releases = @()
+    $page = 1
+
+    while ($true) {
+        $response = Invoke-SELibsGitHubApi `
+            -Uri "$apiRoot/releases?per_page=100&page=$page"
+
+        # Windows PowerShell 5.1 can preserve a top-level JSON array as one
+        # nested pipeline object. Sending it through the pipeline explicitly
+        # enumerates either response shape.
+        $pageReleases = @(
+            $response |
+                ForEach-Object { $_ }
+        )
+
+        $releases += $pageReleases
+
+        if ($pageReleases.Count -lt 100) {
+            break
+        }
+
+        $page++
+    }
+
+    return @($releases)
+}
+
+function ConvertFrom-SELibsPackageReleaseTag {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Tag
+    )
+
+    $prefix = "release/"
+
+    if (-not $Tag.StartsWith($prefix, [System.StringComparison]::Ordinal)) {
+        return $null
+    }
+
+    $remainder = $Tag.Substring($prefix.Length)
+    $separator = $remainder.LastIndexOf("/")
+
+    if ($separator -le 0 -or $separator -eq $remainder.Length - 1) {
+        return $null
+    }
+
+    $packageId = $remainder.Substring(0, $separator)
+    $version = $remainder.Substring($separator + 1)
+
+    if ($packageId -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') {
+        return $null
+    }
+
+    try {
+        $parsedVersion = ConvertTo-SELibsVersion -Version $version
+    }
+    catch {
+        return $null
+    }
+
+    return [pscustomobject]@{
+        PackageId = $packageId
+        Version = $version
+        ParsedVersion = $parsedVersion
+    }
+}
+
+function Get-SELibsGitHubDiscoveredRoutes {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Repository,
+
+        [Parameter(Mandatory = $true)]
+        [object[]]$Releases
+    )
+
+    $routes = @{}
+
+    foreach ($release in $Releases) {
+        if ($release.draft -or $release.prerelease) {
+            continue
+        }
+
+        $tag = [string]$release.tag_name
+        $tagInfo = ConvertFrom-SELibsPackageReleaseTag -Tag $tag
+
+        if ($null -eq $tagInfo) {
+            continue
+        }
+
+        $manifestName = "$($tagInfo.PackageId)-$($tagInfo.Version)-package.json"
+        $manifestAssets = @(
+            $release.assets |
+                Where-Object { $_.name -eq $manifestName }
+        )
+
+        if ($manifestAssets.Count -ne 1) {
+            continue
+        }
+
+        if ($routes.ContainsKey($tagInfo.PackageId)) {
+            continue
+        }
+
+        $routes[$tagInfo.PackageId] = [pscustomobject]@{
+            provider = "github"
+            repository = $Repository
+            releasePrefix = "release/$($tagInfo.PackageId)/"
+            discoveredReleases = $Releases
+        }
+    }
+
+    return $routes
+}
+
+function ConvertTo-SELibsDiscoveredRegistry {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Registry,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Source
+    )
+
+    $repositoriesProperty = $Registry.PSObject.Properties["repositories"]
+
+    if ($null -eq $repositoriesProperty) {
+        throw "Registry '$Source' does not define repositories."
+    }
+
+    $routes = @{}
+    $routeRepositories = @{}
+    $seenRepositories = @{}
+
+    foreach ($entry in @($repositoriesProperty.Value)) {
+        $provider = [string]$entry.provider
+        $repository = [string]$entry.repository
+
+        if ([string]::IsNullOrWhiteSpace($provider)) {
+            throw "Registry '$Source' contains a repository without a provider."
+        }
+
+        if (-not $provider.Equals("github", [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Registry '$Source' uses unsupported repository provider '$provider'."
+        }
+
+        if ($repository -notmatch '^[^/]+/[^/]+$') {
+            throw "Registry '$Source' contains invalid GitHub repository '$repository'."
+        }
+
+        if ($seenRepositories.ContainsKey($repository)) {
+            throw "Registry '$Source' lists repository '$repository' more than once."
+        }
+
+        $seenRepositories[$repository] = $true
+        $releases = @(Get-SELibsGitHubRepositoryReleases -Repository $repository)
+        $discovered = Get-SELibsGitHubDiscoveredRoutes -Repository $repository -Releases $releases
+
+        foreach ($pair in $discovered.GetEnumerator()) {
+            $packageId = [string]$pair.Key
+
+            if ($routes.ContainsKey($packageId)) {
+                throw (
+                    "Package '$packageId' is discovered from more than one " +
+                    "repository: '$($routeRepositories[$packageId])' and " +
+                    "'$repository'."
+                )
+            }
+
+            $routes[$packageId] = $pair.Value
+            $routeRepositories[$packageId] = $repository
+        }
+    }
+
+    $packages = New-Object PSObject
+
+    foreach ($packageId in @($routes.Keys | Sort-Object)) {
+        Add-Member `
+            -InputObject $packages `
+            -MemberType NoteProperty `
+            -Name $packageId `
+            -Value $routes[$packageId]
+    }
+
+    return [pscustomobject]@{
+        schemaVersion = 2
+        packages = $packages
+    }
+}
+
+function ConvertTo-SELibsHybridRegistry {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Registry,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Source
+    )
+
+    $routes = @{}
+
+    foreach ($property in @($Registry.packages.PSObject.Properties)) {
+        $routes[[string]$property.Name] = $property.Value
+    }
+
+    $discoveredRegistry = ConvertTo-SELibsDiscoveredRegistry `
+        -Registry $Registry `
+        -Source $Source
+
+    foreach ($property in @($discoveredRegistry.packages.PSObject.Properties)) {
+        $packageId = [string]$property.Name
+        $discoveredRoute = $property.Value
+
+        if ($routes.ContainsKey($packageId)) {
+            $explicitRoute = $routes[$packageId]
+            $explicitProvider = [string]$explicitRoute.provider
+            $explicitRepository = [string]$explicitRoute.repository
+            $explicitPrefix = [string]$explicitRoute.releasePrefix
+            $discoveredRepository = [string]$discoveredRoute.repository
+            $discoveredPrefix = [string]$discoveredRoute.releasePrefix
+
+            $providerMatches = $explicitProvider.Equals(
+                "github",
+                [System.StringComparison]::OrdinalIgnoreCase
+            )
+            $repositoryMatches = $explicitRepository.Equals(
+                $discoveredRepository,
+                [System.StringComparison]::OrdinalIgnoreCase
+            )
+            $prefixMatches = $explicitPrefix.Equals(
+                $discoveredPrefix,
+                [System.StringComparison]::Ordinal
+            )
+
+            if (-not ($providerMatches -and $repositoryMatches -and $prefixMatches)) {
+                throw (
+                    "Explicit route for package '$packageId' does not match " +
+                    "repository discovery from '$discoveredRepository'."
+                )
+            }
+        }
+
+        # Prefer the discovered route so repository release enumeration can be
+        # reused by later latest-version lookups in this invocation.
+        $routes[$packageId] = $discoveredRoute
+    }
+
+    $packages = New-Object PSObject
+
+    foreach ($packageId in @($routes.Keys | Sort-Object)) {
+        Add-Member `
+            -InputObject $packages `
+            -MemberType NoteProperty `
+            -Name $packageId `
+            -Value $routes[$packageId]
+    }
+
+    return [pscustomobject]@{
+        schemaVersion = 1
+        packages = $packages
+    }
+}
+
 function Copy-SELibsResource {
     [CmdletBinding()]
     param(
@@ -288,21 +567,42 @@ function Read-SELibsRegistry {
 
     $registry = Read-SELibsJsonResource -Source $source
 
-    if (
-        $null -eq $registry.schemaVersion -or
-        $registry.schemaVersion -ne 1
-    ) {
-        throw "Registry '$source' does not use supported schema version 1."
+    if ($null -eq $registry.schemaVersion) {
+        throw "Registry '$source' does not define a schema version."
     }
 
-    if ($null -eq $registry.packages) {
-        throw "Registry '$source' does not define packages."
+    if ($registry.schemaVersion -eq 1) {
+        if ($null -eq $registry.packages) {
+            throw "Registry '$source' does not define packages."
+        }
+
+        $repositoriesProperty = $registry.PSObject.Properties["repositories"]
+
+        if ($null -eq $repositoriesProperty) {
+            return [pscustomobject]@{
+                Source = $source
+                Value = $registry
+            }
+        }
+
+        return [pscustomobject]@{
+            Source = $source
+            Value = ConvertTo-SELibsHybridRegistry `
+                -Registry $registry `
+                -Source $source
+        }
     }
 
-    return [pscustomobject]@{
-        Source = $source
-        Value = $registry
+    if ($registry.schemaVersion -eq 2) {
+        return [pscustomobject]@{
+            Source = $source
+            Value = ConvertTo-SELibsDiscoveredRegistry `
+                -Registry $registry `
+                -Source $source
+        }
     }
+
+    throw "Registry '$source' does not use supported schema version 1 or 2."
 }
 
 function Get-SELibsPackageRoute {
@@ -432,16 +732,20 @@ function Get-SELibsGitHubRelease {
     $apiRoot = "https://api.github.com/repos/$repository"
 
     if ([string]::IsNullOrWhiteSpace($RequestedVersion)) {
-        $releaseResponse = Invoke-SELibsGitHubApi `
-            -Uri "$apiRoot/releases?per_page=100"
+        $cacheProperty = $Route.PSObject.Properties["discoveredReleases"]
 
-        # Windows PowerShell 5.1 can preserve a top-level JSON array as one
-        # nested pipeline object. Sending the result through the pipeline
-        # explicitly enumerates either response shape.
-        $releases = @(
-            $releaseResponse |
-                ForEach-Object { $_ }
-        )
+        if ($null -eq $cacheProperty) {
+            $releases = @(
+                Get-SELibsGitHubRepositoryReleases `
+                    -Repository $repository
+            )
+        }
+        else {
+            $releases = @(
+                $cacheProperty.Value |
+                    ForEach-Object { $_ }
+            )
+        }
 
         $candidates = @()
 
