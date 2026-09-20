@@ -44,6 +44,10 @@
     {
       "provider": "github",
       "repository": "Marco-Zechner/SE-RichHudChatAPI"
+    },
+    {
+      "provider": "github",
+      "repository": "Marco-Zechner/SE-ConfigAPI"
     }
   ]
 }
