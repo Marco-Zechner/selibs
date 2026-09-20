@@ -113,6 +113,76 @@ Assert-Equal `
     -Actual $byteJsonResult.id `
     -Message "Byte-backed JSON should decode as UTF-8."
 
+$originalGitHubTokenEnvironment = $env:GITHUB_TOKEN
+$originalGhTokenEnvironment = $env:GH_TOKEN
+$originalGitHubCliToken = ${function:Invoke-SELibsGitHubCliToken}
+
+try {
+    $env:GITHUB_TOKEN = "github-environment-token"
+    $env:GH_TOKEN = "gh-environment-token"
+    $script:SELibsGitHubCliTokenResolved = $false
+    $script:SELibsGitHubCliToken = $null
+
+    $headers = Get-SELibsWebHeaders -GitHubApi
+
+    Assert-Equal `
+        -Expected "Bearer github-environment-token" `
+        -Actual ([string]$headers["Authorization"]) `
+        -Message "GITHUB_TOKEN should take precedence for GitHub API authentication."
+
+    $env:GITHUB_TOKEN = $null
+    $headers = Get-SELibsWebHeaders -GitHubApi
+
+    Assert-Equal `
+        -Expected "Bearer gh-environment-token" `
+        -Actual ([string]$headers["Authorization"]) `
+        -Message "GH_TOKEN should authenticate GitHub API requests when GITHUB_TOKEN is absent."
+
+    $env:GH_TOKEN = $null
+    $script:GitHubCliTokenCalls = 0
+    $script:SELibsGitHubCliTokenResolved = $false
+    $script:SELibsGitHubCliToken = $null
+
+    Set-Item -Path Function:\Invoke-SELibsGitHubCliToken -Value {
+        $script:GitHubCliTokenCalls++
+        return "github-cli-token"
+    }
+
+    $firstCliHeaders = Get-SELibsWebHeaders -GitHubApi
+    $secondCliHeaders = Get-SELibsWebHeaders -GitHubApi
+
+    Assert-Equal `
+        -Expected "Bearer github-cli-token" `
+        -Actual ([string]$firstCliHeaders["Authorization"]) `
+        -Message "An authenticated GitHub CLI session should be used when environment tokens are absent."
+
+    Assert-Equal `
+        -Expected "Bearer github-cli-token" `
+        -Actual ([string]$secondCliHeaders["Authorization"]) `
+        -Message "Cached GitHub CLI authentication should remain available for later API requests."
+
+    Assert-Equal `
+        -Expected 1 `
+        -Actual $script:GitHubCliTokenCalls `
+        -Message "GitHub CLI token resolution should run only once per SELibs process."
+
+    $script:SELibsGitHubCliTokenResolved = $false
+    $script:SELibsGitHubCliToken = $null
+    Set-Item -Path Function:\Invoke-SELibsGitHubCliToken -Value { return $null }
+
+    $anonymousHeaders = Get-SELibsWebHeaders -GitHubApi
+
+    Assert-True `
+        -Condition (-not $anonymousHeaders.ContainsKey("Authorization")) `
+        -Message "SELibs should remain usable anonymously when no GitHub authentication is available."
+}
+finally {
+    $env:GITHUB_TOKEN = $originalGitHubTokenEnvironment
+    $env:GH_TOKEN = $originalGhTokenEnvironment
+    $script:SELibsGitHubCliTokenResolved = $false
+    $script:SELibsGitHubCliToken = $null
+    Set-Item -Path Function:\Invoke-SELibsGitHubCliToken -Value $originalGitHubCliToken
+}
 $originalProgressPreference = $ProgressPreference
 $ProgressPreference = "Continue"
 

@@ -3,6 +3,56 @@ $script:SELibsDefaultRegistryUrl = (
     "Marco-Zechner/selibs/main/registry/packages.json"
 )
 
+$script:SELibsGitHubCliTokenResolved = $false
+$script:SELibsGitHubCliToken = $null
+
+function Invoke-SELibsGitHubCliToken {
+    [CmdletBinding()]
+    param()
+
+    $command = Get-Command gh -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($null -eq $command) {
+        return $null
+    }
+
+    try {
+        $output = @(& $command.Source auth token 2>$null)
+        if ($LASTEXITCODE -ne 0 -or $output.Count -eq 0) {
+            return $null
+        }
+
+        $token = [string]$output[0]
+        if ([string]::IsNullOrWhiteSpace($token)) {
+            return $null
+        }
+
+        return $token.Trim()
+    }
+    catch {
+        return $null
+    }
+}
+
+function Get-SELibsGitHubToken {
+    [CmdletBinding()]
+    param()
+
+    if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_TOKEN)) {
+        return $env:GITHUB_TOKEN.Trim()
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
+        return $env:GH_TOKEN.Trim()
+    }
+
+    if (-not $script:SELibsGitHubCliTokenResolved) {
+        $script:SELibsGitHubCliTokenResolved = $true
+        $script:SELibsGitHubCliToken = Invoke-SELibsGitHubCliToken
+    }
+
+    return $script:SELibsGitHubCliToken
+}
+
 function Get-SELibsWebHeaders {
     [CmdletBinding()]
     param(
@@ -17,8 +67,9 @@ function Get-SELibsWebHeaders {
         $headers["Accept"] = "application/vnd.github+json"
         $headers["X-GitHub-Api-Version"] = "2026-03-10"
 
-        if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_TOKEN)) {
-            $headers["Authorization"] = "Bearer $($env:GITHUB_TOKEN)"
+        $token = Get-SELibsGitHubToken
+        if (-not [string]::IsNullOrWhiteSpace($token)) {
+            $headers["Authorization"] = "Bearer $token"
         }
     }
 
