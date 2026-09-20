@@ -394,6 +394,7 @@ try {
         "Marco-Zechner/space-engineers-mod-libraries"
         "Marco-Zechner/SE-CommandAPI"
         "Marco-Zechner/SE-RichHudChatAPI"
+        "Marco-Zechner/SE-ConfigAPI"
     )
 
     $productionRepositories = @(
