@@ -116,18 +116,27 @@ Install the first direct library with an exact version:
 selibs add Mz.ApiProtocol@0.2.0
 ```
 
-SELibs resolves exact transitive dependencies through the central routing
+SELibs resolves transitive dependency versions through the central routing
 registry, verifies component checksums, installs source folders, updates
 `selibs.json`, and creates `selibs.lock.json`.
 
-Additional direct libraries can be added with the same command. SELibs
-re-resolves the complete exact-version dependency graph and installs shared
-dependencies only once.
+Direct versions selected in `selibs.json` are exact. Dependency versions
+declared by packages are minimum compatible requirements: the selected version
+must be greater than or equal to the requirement and have the same major
+version. This rule intentionally also applies to `0.x` releases, so a `0.3.0`
+requirement accepts `0.3.1` and `0.4.0`, but not `1.0.0`.
 
-A mod contains one exact version of each package. If two direct libraries
-require different versions of the same transitive library, SELibs stops before
-changing files and reports both requirement paths. Select direct-library
-versions whose exact dependency requirements agree.
+Additional direct libraries can be added with the same command. SELibs
+re-resolves the complete dependency graph and installs one exact selected
+version of each package. Multiple compatible transitive requirements select the
+highest required minimum. If that raises an already installed transitive
+package, SELibs installs the selected release, resolves that release's own
+dependencies, and removes dependencies that are no longer reachable.
+
+An exact direct selection must still satisfy every transitive minimum for that
+package. Resolution stops before changing files when a direct selection is
+below a required minimum or when dependency requirements use incompatible major
+versions.
 
 Inspect the installed graph and check for newer stable releases with:
 

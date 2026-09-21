@@ -99,7 +99,10 @@ schema-version-1 packages published before changelog support remain installable.
 release. Select an exact release with
 `selibs changelog Package.Id@2.1.0`.
 
-Dependency versions are exact in the initial implementation.
+Dependency versions declared by a package are minimum compatible requirements.
+The selected version must be greater than or equal to the requirement and have
+the same major version. The same rule applies to `0.x` versions: for example,
+`0.3.0` accepts `0.3.1` and `0.4.0`, but not `1.0.0`.
 
 The component archive contains only its own source folders beneath one
 `Libraries` root:
@@ -113,8 +116,12 @@ folders, folder collisions, and checksum mismatches.
 
 ## Project reconciliation
 
-`selibs add` resolves every direct dependency in `selibs.json`, detects exact
-version conflicts, and installs only packages not already present in the lock.
+`selibs add` resolves every direct dependency in `selibs.json` plus all
+transitive minimum requirements. Direct versions remain exact. Compatible
+transitive requirements select the highest required minimum within one major
+version. If resolution raises an installed transitive package, add replaces it
+transactionally, resolves dependencies introduced by the selected release, and
+removes locked dependencies that are no longer reachable.
 
 `selibs remove` removes the selected direct dependency and all locked packages
 that are no longer reachable from another direct dependency. Before deleting
@@ -151,6 +158,8 @@ folder changes. Existing managed files are checksum-verified, changed packages
 are staged, and folder swaps plus manifest and lock updates are rolled back
 together if the transaction fails.
 
-A mod contains one exact version of each package. If two dependency paths
-require different versions, resolution fails before the transaction starts and
-reports both paths so compatible direct-package versions can be selected.
+A mod contains one exact selected version of each package. Different transitive
+requirements can share that package when one selected version satisfies every
+minimum within the same major version; the highest required minimum is selected.
+Resolution fails before the transaction starts when requirements use different
+major versions or when an exact direct selection is below a transitive minimum.
