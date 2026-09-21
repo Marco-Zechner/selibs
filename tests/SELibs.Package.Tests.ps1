@@ -752,6 +752,26 @@ try {
 
     New-TestPackageRelease `
         -CatalogRoot $catalog `
+        -Id "Test.Leaf" `
+        -Version "1.0.0" `
+        -Folders @("Test.Leaf") `
+        -Dependencies @{} `
+        -FileText "// leaf" |
+        Out-Null
+
+    New-TestPackageRelease `
+        -CatalogRoot $catalog `
+        -Id "Test.Dependency" `
+        -Version "1.1.0" `
+        -Folders @("Test.Dependency") `
+        -Dependencies @{
+            "Test.Leaf" = "1.0.0"
+        } `
+        -FileText "// dependency v1.1" |
+        Out-Null
+
+    New-TestPackageRelease `
+        -CatalogRoot $catalog `
         -Id "Test.Dependency" `
         -Version "2.0.0" `
         -Folders @("Test.Dependency") `
@@ -802,7 +822,7 @@ try {
         -Version "1.0.0" `
         -Folders @("Test.Second") `
         -Dependencies @{
-            "Test.Dependency" = "1.0.0"
+            "Test.Dependency" = "1.1.0"
         } `
         -FileText "// second" |
         Out-Null
@@ -858,6 +878,10 @@ try {
                     provider = "filesystem"
                     location = (Join-Path $catalog "Test.Dependency")
                 }
+                "Test.Leaf" = [ordered]@{
+                    provider = "filesystem"
+                    location = (Join-Path $catalog "Test.Leaf")
+                }
                 "Test.Root" = [ordered]@{
                     provider = "filesystem"
                     location = (Join-Path $catalog "Test.Root")
@@ -877,6 +901,108 @@ try {
             }
         })
 
+    Assert-True `
+        -Condition (Test-SELibsCompatibleVersionRequirement -SelectedVersion "0.3.1" -RequiredVersion "0.3.0") `
+        -Message "A newer 0.x patch version did not satisfy an older dependency minimum."
+
+    Assert-True `
+        -Condition (Test-SELibsCompatibleVersionRequirement -SelectedVersion "0.4.0" -RequiredVersion "0.3.0") `
+        -Message "A newer 0.x minor version with the same major did not satisfy the dependency minimum."
+
+    Assert-True `
+        -Condition (-not (Test-SELibsCompatibleVersionRequirement -SelectedVersion "1.0.0" -RequiredVersion "0.3.0")) `
+        -Message "A different major version incorrectly satisfied a dependency minimum."
+
+    $compatibilityRegistry = Read-SELibsRegistry -RegistryUrl $registryPath
+    $mixedDirectGraph = @(Resolve-SELibsProjectGraph -Registry $compatibilityRegistry -DirectDependencies ([ordered]@{
+        "Test.Dependency" = "1.1.0"
+        "Test.Root" = "2.0.0"
+    }))
+    $mixedDirectById = @{}
+    foreach ($descriptor in $mixedDirectGraph) { $mixedDirectById[$descriptor.Id] = $descriptor }
+
+    Assert-Equal `
+        -Expected "1.1.0" `
+        -Actual ([string]$mixedDirectById["Test.Dependency"].Version) `
+        -Message "An exact direct version did not satisfy an older compatible transitive minimum."
+
+    Assert-True `
+        -Condition $mixedDirectById.ContainsKey("Test.Leaf") `
+        -Message "The exact direct compatible version did not resolve its own dependencies."
+
+    Assert-Throws `
+        -Action {
+            Resolve-SELibsProjectGraph -Registry $compatibilityRegistry -DirectDependencies ([ordered]@{
+                "Test.Dependency" = "1.0.0"
+                "Test.Second" = "1.0.0"
+            }) | Out-Null
+        } `
+        -ExpectedMessagePart "A direct package version must satisfy every dependency minimum within the same major version."
+
+    $reconcileCatalog = Join-Path $testRoot "reconcile-catalog"
+
+    New-TestPackageRelease -CatalogRoot $reconcileCatalog -Id "Test.OldLeaf" -Version "1.0.0" -Folders @("Test.OldLeaf") -Dependencies @{} -FileText "// old leaf" | Out-Null
+    New-TestPackageRelease -CatalogRoot $reconcileCatalog -Id "Test.NewLeaf" -Version "1.0.0" -Folders @("Test.NewLeaf") -Dependencies @{} -FileText "// new leaf" | Out-Null
+    New-TestPackageRelease -CatalogRoot $reconcileCatalog -Id "Test.Switch" -Version "1.0.0" -Folders @("Test.Switch") -Dependencies @{ "Test.OldLeaf" = "1.0.0" } -FileText "// switch v1" | Out-Null
+    New-TestPackageRelease -CatalogRoot $reconcileCatalog -Id "Test.Switch" -Version "1.1.0" -Folders @("Test.Switch") -Dependencies @{ "Test.NewLeaf" = "1.0.0" } -FileText "// switch v1.1" | Out-Null
+    New-TestPackageRelease -CatalogRoot $reconcileCatalog -Id "Test.ReconcileRootA" -Version "1.0.0" -Folders @("Test.ReconcileRootA") -Dependencies @{ "Test.Switch" = "1.0.0" } -FileText "// root a" | Out-Null
+    New-TestPackageRelease -CatalogRoot $reconcileCatalog -Id "Test.ReconcileRootB" -Version "1.0.0" -Folders @("Test.ReconcileRootB") -Dependencies @{ "Test.Switch" = "1.1.0" } -FileText "// root b" | Out-Null
+
+    $reconcileRegistryPath = Join-Path $testRoot "reconcile-registry.json"
+    Write-TestJson -Path $reconcileRegistryPath -Value ([ordered]@{
+        schemaVersion = 1
+        packages = [ordered]@{
+            "Test.OldLeaf" = [ordered]@{ provider = "filesystem"; location = (Join-Path $reconcileCatalog "Test.OldLeaf") }
+            "Test.NewLeaf" = [ordered]@{ provider = "filesystem"; location = (Join-Path $reconcileCatalog "Test.NewLeaf") }
+            "Test.Switch" = [ordered]@{ provider = "filesystem"; location = (Join-Path $reconcileCatalog "Test.Switch") }
+            "Test.ReconcileRootA" = [ordered]@{ provider = "filesystem"; location = (Join-Path $reconcileCatalog "Test.ReconcileRootA") }
+            "Test.ReconcileRootB" = [ordered]@{ provider = "filesystem"; location = (Join-Path $reconcileCatalog "Test.ReconcileRootB") }
+        }
+    })
+
+    $reconcileRoot = Join-Path $testRoot "ReconcileAddMod"
+    New-Item -ItemType Directory -Path (Join-Path $reconcileRoot "Data\Scripts\ReconcileAddMod") -Force | Out-Null
+    Invoke-SELibsInit -ModRoot $reconcileRoot | Out-Null
+    Invoke-SELibsAdd -ModRoot $reconcileRoot -PackageSpec "Test.ReconcileRootA@1.0.0" -RegistryUrl $reconcileRegistryPath | Out-Null
+
+    $reconcileOutput = @(Invoke-SELibsAdd -ModRoot $reconcileRoot -PackageSpec "Test.ReconcileRootB@1.0.0" -RegistryUrl $reconcileRegistryPath)
+
+    Assert-True `
+        -Condition ($reconcileOutput -contains "Updated dependency Test.Switch 1.0.0 -> 1.1.0.") `
+        -Message "Adding a compatible higher requirement did not report the transitive package upgrade."
+
+    Assert-True `
+        -Condition ($reconcileOutput -contains "Installed dependency Test.NewLeaf 1.0.0.") `
+        -Message "Adding a compatible higher requirement did not install the selected release's new dependency."
+
+    Assert-True `
+        -Condition ($reconcileOutput -contains "Removed unused dependency Test.OldLeaf 1.0.0.") `
+        -Message "Adding a compatible higher requirement did not remove the dependency dropped by the selected release."
+
+    $reconcileLibraries = Join-Path $reconcileRoot "Data\Scripts\ReconcileAddMod\Libraries"
+    Assert-True `
+        -Condition (-not (Test-Path -LiteralPath (Join-Path $reconcileLibraries "Test.OldLeaf"))) `
+        -Message "The dependency dropped by the raised transitive release remains installed."
+
+    Assert-Equal `
+        -Expected "// new leaf`n" `
+        -Actual ([System.IO.File]::ReadAllText((Join-Path $reconcileLibraries "Test.NewLeaf\Test.NewLeaf.cs"))) `
+        -Message "The dependency introduced by the raised transitive release was not installed correctly."
+
+    $reconcileLock = Get-Content -LiteralPath (Join-Path $reconcileRoot "selibs.lock.json") -Raw | ConvertFrom-Json
+
+    Assert-Equal `
+        -Expected "1.1.0" `
+        -Actual ([string]$reconcileLock.packages."Test.Switch".version) `
+        -Message "The raised compatible transitive release was not locked."
+
+    Assert-True `
+        -Condition ($null -eq (Get-SELibsObjectProperty -Object $reconcileLock.packages -Name "Test.OldLeaf")) `
+        -Message "The dependency dropped by the raised release remains in the lock."
+
+    Assert-True `
+        -Condition ($null -ne (Get-SELibsObjectProperty -Object $reconcileLock.packages -Name "Test.NewLeaf")) `
+        -Message "The dependency introduced by the raised release is missing from the lock."
     $modRoot = Join-Path $testRoot "PackageMod"
 
     New-Item `
@@ -991,7 +1117,7 @@ try {
     Assert-True `
         -Condition (
             $listOutput -contains (
-                "Summary: 5 packages found; 0 unavailable."
+                "Summary: 6 packages found; 0 unavailable."
             )
         ) `
         -Message "List produced the wrong package summary."
@@ -1193,9 +1319,9 @@ try {
     Assert-True `
         -Condition (
             $conflictMessage -like
-            "*one exact version of each package per mod*"
+            "*Dependency requirements must use the same major version.*"
         ) `
-        -Message "The exact-version conflict policy was not explained."
+        -Message "The incompatible-major dependency policy was not explained."
 
     $manifestAfterConflict = Get-Content `
         -LiteralPath (Join-Path $modRoot "selibs.json") `
@@ -1244,9 +1370,28 @@ try {
         ConvertFrom-Json
 
     Assert-Equal `
-        -Expected 3 `
+        -Expected 4 `
         -Actual @($lock.packages.PSObject.Properties).Count `
-        -Message "The reconciled lock did not contain three packages."
+        -Message "The reconciled lock did not contain four packages."
+
+    Assert-Equal `
+        -Expected "1.1.0" `
+        -Actual ([string]$lock.packages."Test.Dependency".version) `
+        -Message "Compatible dependency requirements did not select the highest minimum version."
+
+    Assert-True `
+        -Condition ($null -ne $lock.packages."Test.Leaf") `
+        -Message "Raising the dependency minimum did not resolve its newly introduced dependency."
+
+    Assert-Equal `
+        -Expected "// dependency v1.1`n" `
+        -Actual ([System.IO.File]::ReadAllText((Join-Path $libraries "Test.Dependency\Test.Dependency.cs"))) `
+        -Message "The compatible dependency upgrade was not installed."
+
+    Assert-Equal `
+        -Expected "// leaf`n" `
+        -Actual ([System.IO.File]::ReadAllText((Join-Path $libraries "Test.Leaf\Test.Leaf.cs"))) `
+        -Message "The dependency introduced by the selected compatible release was not installed."
 
     $removeRootOutput = @(
         Invoke-SELibsRemove `
@@ -1284,7 +1429,7 @@ try {
         ConvertFrom-Json
 
     Assert-Equal `
-        -Expected 2 `
+        -Expected 3 `
         -Actual @($lockAfterFirstRemove.packages.PSObject.Properties).Count `
         -Message "The first removal produced the wrong lock graph."
 
@@ -1303,12 +1448,20 @@ try {
     Assert-True `
         -Condition (
             $removeSecondOutput -contains (
-                "Removed unused dependency Test.Dependency 1.0.0."
+                "Removed unused dependency Test.Dependency 1.1.0."
             )
         ) `
         -Message "The orphaned dependency was not reported."
 
-    foreach ($folder in @("Test.Second", "Test.Dependency")) {
+    Assert-True `
+        -Condition (
+            $removeSecondOutput -contains (
+                "Removed unused dependency Test.Leaf 1.0.0."
+            )
+        ) `
+        -Message "The newly introduced orphaned dependency was not reported."
+
+    foreach ($folder in @("Test.Second", "Test.Dependency", "Test.Leaf")) {
         Assert-True `
             -Condition (-not (Test-Path -LiteralPath (
                 Join-Path $libraries $folder
@@ -1532,10 +1685,18 @@ try {
     Assert-True `
         -Condition (
             $updateAllOutput -contains (
-                "Updated dependency Test.Dependency 1.0.0 -> 2.0.0."
+                "Updated dependency Test.Dependency 1.1.0 -> 2.0.0."
             )
         ) `
         -Message "Update-all did not reconcile the shared dependency."
+
+    Assert-True `
+        -Condition (
+            $updateAllOutput -contains (
+                "Removed unused dependency Test.Leaf 1.0.0."
+            )
+        ) `
+        -Message "Update-all did not remove the dependency dropped by the selected higher release."
 
     $updateAllManifest = Get-Content `
         -LiteralPath (Join-Path $updateAllRoot "selibs.json") `
@@ -1561,6 +1722,10 @@ try {
         -Expected "2.0.0" `
         -Actual ([string]$updateAllLock.packages."Test.Dependency".version) `
         -Message "Update-all locked the wrong shared dependency version."
+
+    Assert-True `
+        -Condition ($null -eq (Get-SELibsObjectProperty -Object $updateAllLock.packages -Name "Test.Leaf")) `
+        -Message "Update-all retained a dependency that is unreachable from the selected higher release."
     $updateModifiedRoot = Join-Path $testRoot "UpdateModifiedMod"
 
     New-Item `

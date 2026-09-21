@@ -1210,6 +1210,205 @@ function Get-SELibsPackageDescriptor {
     }
 }
 
+function Test-SELibsCompatibleVersionRequirement {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SelectedVersion,
+
+        [Parameter(Mandatory = $true)]
+        [string]$RequiredVersion
+    )
+
+    $selected = ConvertTo-SELibsVersion -Version $SelectedVersion
+    $required = ConvertTo-SELibsVersion -Version $RequiredVersion
+
+    return $selected.Major -eq $required.Major -and $selected.CompareTo($required) -ge 0
+}
+
+function Resolve-SELibsDependencyGraph {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Registry,
+
+        [Parameter(Mandatory = $true)]
+        [System.Collections.IDictionary]$DirectDependencies
+    )
+
+    $directVersions = [ordered]@{}
+
+    foreach ($packageId in @($DirectDependencies.Keys | Sort-Object)) {
+        $requestedVersion = [string]$DirectDependencies[$packageId]
+
+        if ([string]::IsNullOrWhiteSpace($requestedVersion)) {
+            $descriptor = Get-SELibsPackageDescriptor -Registry $Registry -PackageId $packageId
+            $directVersions[$descriptor.Id] = $descriptor.Version
+        }
+        else {
+            [void](ConvertTo-SELibsVersion -Version $requestedVersion)
+            $directVersions[$packageId] = $requestedVersion
+        }
+    }
+
+    $selectedVersions = [ordered]@{}
+
+    foreach ($packageId in @($directVersions.Keys | Sort-Object)) {
+        $selectedVersions[$packageId] = [string]$directVersions[$packageId]
+    }
+
+    for ($pass = 0; $pass -lt 100; $pass++) {
+        $requirements = @{}
+        $resolved = [ordered]@{}
+        $visiting = @{}
+        $order = New-Object System.Collections.ArrayList
+
+        function Add-Requirement {
+            param(
+                [Parameter(Mandatory = $true)]
+                [string]$PackageId,
+
+                [Parameter(Mandatory = $true)]
+                [string]$RequiredVersion,
+
+                [Parameter(Mandatory = $true)]
+                [string]$RequirementPath
+            )
+
+            [void](ConvertTo-SELibsVersion -Version $RequiredVersion)
+
+            if (-not $requirements.ContainsKey($PackageId)) {
+                $requirements[$PackageId] = New-Object System.Collections.ArrayList
+            }
+
+            [void]$requirements[$PackageId].Add([pscustomobject]@{
+                Version = $RequiredVersion
+                Path = $RequirementPath
+            })
+        }
+
+        foreach ($packageId in @($directVersions.Keys | Sort-Object)) {
+            $version = [string]$directVersions[$packageId]
+            Add-Requirement -PackageId $packageId -RequiredVersion $version -RequirementPath "$packageId@$version"
+        }
+
+        function Resolve-SelectedPackage {
+            param(
+                [Parameter(Mandatory = $true)]
+                [string]$PackageId,
+
+                [string[]]$RequirementPath = @()
+            )
+
+            if ($resolved.Contains($PackageId)) {
+                return
+            }
+
+            if ($visiting.ContainsKey($PackageId)) {
+                $cyclePath = @($RequirementPath + $PackageId) -join " -> "
+                throw "Dependency cycle detected: $cyclePath."
+            }
+
+            if (-not $selectedVersions.Contains($PackageId)) {
+                return
+            }
+
+            $visiting[$PackageId] = $true
+
+            try {
+                $descriptor = Get-SELibsPackageDescriptor -Registry $Registry -PackageId $PackageId -RequestedVersion ([string]$selectedVersions[$PackageId])
+                $currentPath = @($RequirementPath + "$($descriptor.Id)@$($descriptor.Version)")
+
+                foreach ($dependency in @($descriptor.Dependencies.PSObject.Properties | Sort-Object Name)) {
+                    $requiredVersion = [string]$dependency.Value
+                    $requestedPath = @($currentPath + "$($dependency.Name)@$requiredVersion") -join " -> "
+                    Add-Requirement -PackageId $dependency.Name -RequiredVersion $requiredVersion -RequirementPath $requestedPath
+
+                    if ($selectedVersions.Contains($dependency.Name)) {
+                        Resolve-SelectedPackage -PackageId $dependency.Name -RequirementPath $currentPath
+                    }
+                }
+
+                $resolved[$descriptor.Id] = $descriptor
+                [void]$order.Add($descriptor)
+            }
+            finally {
+                $visiting.Remove($PackageId)
+            }
+        }
+
+        foreach ($packageId in @($directVersions.Keys | Sort-Object)) {
+            Resolve-SelectedPackage -PackageId $packageId
+        }
+
+        $nextSelectedVersions = [ordered]@{}
+
+        foreach ($packageId in @($requirements.Keys | Sort-Object)) {
+            $claims = @($requirements[$packageId])
+
+            if ($directVersions.Contains($packageId)) {
+                $directVersion = [string]$directVersions[$packageId]
+
+                foreach ($claim in $claims) {
+                    if (-not (Test-SELibsCompatibleVersionRequirement -SelectedVersion $directVersion -RequiredVersion ([string]$claim.Version))) {
+                        throw (
+                            "Dependency conflict for '$packageId'.`n" +
+                            "  Direct selection: $packageId@$directVersion`n" +
+                            "  Incompatible requirement: $($claim.Path)`n" +
+                            "A direct package version must satisfy every dependency minimum within the same major version."
+                        )
+                    }
+                }
+
+                $nextSelectedVersions[$packageId] = $directVersion
+                continue
+            }
+
+            $selectedClaim = $claims[0]
+            $selectedParsed = ConvertTo-SELibsVersion -Version ([string]$selectedClaim.Version)
+
+            foreach ($claim in $claims | Select-Object -Skip 1) {
+                $claimParsed = ConvertTo-SELibsVersion -Version ([string]$claim.Version)
+
+                if ($claimParsed.Major -ne $selectedParsed.Major) {
+                    throw (
+                        "Dependency conflict for '$packageId'.`n" +
+                        "  Existing requirement: $($selectedClaim.Path)`n" +
+                        "  Conflicting requirement: $($claim.Path)`n" +
+                        "Dependency requirements must use the same major version."
+                    )
+                }
+
+                if ($claimParsed.CompareTo($selectedParsed) -gt 0) {
+                    $selectedClaim = $claim
+                    $selectedParsed = $claimParsed
+                }
+            }
+
+            $nextSelectedVersions[$packageId] = [string]$selectedClaim.Version
+        }
+
+        $stable = $selectedVersions.Count -eq $nextSelectedVersions.Count
+
+        if ($stable) {
+            foreach ($packageId in @($nextSelectedVersions.Keys)) {
+                if (-not $selectedVersions.Contains($packageId) -or [string]$selectedVersions[$packageId] -ne [string]$nextSelectedVersions[$packageId]) {
+                    $stable = $false
+                    break
+                }
+            }
+        }
+
+        if ($stable) {
+            return @($order)
+        }
+
+        $selectedVersions = $nextSelectedVersions
+    }
+
+    throw "Dependency graph resolution did not converge."
+}
+
 function Resolve-SELibsPackageGraph {
     [CmdletBinding()]
     param(
@@ -1222,97 +1421,12 @@ function Resolve-SELibsPackageGraph {
         [string]$RootVersion
     )
 
-    $resolved = [ordered]@{}
-    $resolvedPaths = @{}
-    $visiting = @{}
-    $order = New-Object System.Collections.ArrayList
-
-    function Resolve-Package {
-        param(
-            [Parameter(Mandatory = $true)]
-            [string]$PackageId,
-
-            [string]$RequestedVersion,
-
-            [string[]]$RequirementPath = @()
-        )
-
-        if ($resolved.Contains($PackageId)) {
-            $existing = $resolved[$PackageId]
-
-            if (
-                -not [string]::IsNullOrWhiteSpace($RequestedVersion) -and
-                $existing.Version -ne $RequestedVersion
-            ) {
-                $requestedPath = @(
-                    $RequirementPath +
-                    "$PackageId@$RequestedVersion"
-                ) -join " -> "
-
-                throw (
-                    "Dependency conflict for '$PackageId'.`n" +
-                    "  Existing requirement: " +
-                    "$($resolvedPaths[$PackageId])`n" +
-                    "  Conflicting requirement: $requestedPath`n" +
-                    "SELibs installs one exact version of each package per " +
-                    "mod. Update the direct packages so their dependency " +
-                    "requirements agree."
-                )
-            }
-
-            return
-        }
-
-        if ($visiting.ContainsKey($PackageId)) {
-            $cyclePath = @(
-                $RequirementPath +
-                $PackageId
-            ) -join " -> "
-
-            throw "Dependency cycle detected: $cyclePath."
-        }
-
-        $visiting[$PackageId] = $true
-
-        try {
-            $descriptor = Get-SELibsPackageDescriptor `
-                -Registry $Registry `
-                -PackageId $PackageId `
-                -RequestedVersion $RequestedVersion
-
-            $currentPath = @(
-                $RequirementPath +
-                "$($descriptor.Id)@$($descriptor.Version)"
-            )
-
-            foreach (
-                $dependency in @(
-                    $descriptor.Dependencies.PSObject.Properties |
-                        Sort-Object Name
-                )
-            ) {
-                Resolve-Package `
-                    -PackageId $dependency.Name `
-                    -RequestedVersion ([string]$dependency.Value) `
-                    -RequirementPath $currentPath
-            }
-
-            $resolved[$PackageId] = $descriptor
-            $resolvedPaths[$PackageId] = $currentPath -join " -> "
-            [void]$order.Add($descriptor)
-        }
-        finally {
-            $visiting.Remove($PackageId)
-        }
+    $directDependencies = [ordered]@{
+        $RootPackageId = $RootVersion
     }
 
-    Resolve-Package `
-        -PackageId $RootPackageId `
-        -RequestedVersion $RootVersion
-
-    return @($order)
+    return @(Resolve-SELibsDependencyGraph -Registry $Registry -DirectDependencies $directDependencies)
 }
-
 function Expand-SELibsComponentArchive {
     [CmdletBinding()]
     param(
@@ -1627,99 +1741,8 @@ function Resolve-SELibsProjectGraph {
         [System.Collections.IDictionary]$DirectDependencies
     )
 
-    $resolved = [ordered]@{}
-    $resolvedPaths = @{}
-    $visiting = @{}
-    $order = New-Object System.Collections.ArrayList
-
-    function Resolve-ProjectPackage {
-        param(
-            [Parameter(Mandatory = $true)]
-            [string]$PackageId,
-
-            [string]$RequestedVersion,
-
-            [string[]]$RequirementPath = @()
-        )
-
-        if ($resolved.Contains($PackageId)) {
-            $existing = $resolved[$PackageId]
-
-            if (
-                -not [string]::IsNullOrWhiteSpace($RequestedVersion) -and
-                $existing.Version -ne $RequestedVersion
-            ) {
-                $requestedPath = @(
-                    $RequirementPath +
-                    "$PackageId@$RequestedVersion"
-                ) -join " -> "
-
-                throw (
-                    "Dependency conflict for '$PackageId'.`n" +
-                    "  Existing requirement: " +
-                    "$($resolvedPaths[$PackageId])`n" +
-                    "  Conflicting requirement: $requestedPath`n" +
-                    "SELibs installs one exact version of each package per " +
-                    "mod. Update the direct packages so their dependency " +
-                    "requirements agree."
-                )
-            }
-
-            return
-        }
-
-        if ($visiting.ContainsKey($PackageId)) {
-            $cyclePath = @(
-                $RequirementPath +
-                $PackageId
-            ) -join " -> "
-
-            throw "Dependency cycle detected: $cyclePath."
-        }
-
-        $visiting[$PackageId] = $true
-
-        try {
-            $descriptor = Get-SELibsPackageDescriptor `
-                -Registry $Registry `
-                -PackageId $PackageId `
-                -RequestedVersion $RequestedVersion
-
-            $currentPath = @(
-                $RequirementPath +
-                "$($descriptor.Id)@$($descriptor.Version)"
-            )
-
-            foreach (
-                $dependency in @(
-                    $descriptor.Dependencies.PSObject.Properties |
-                        Sort-Object Name
-                )
-            ) {
-                Resolve-ProjectPackage `
-                    -PackageId $dependency.Name `
-                    -RequestedVersion ([string]$dependency.Value) `
-                    -RequirementPath $currentPath
-            }
-
-            $resolved[$PackageId] = $descriptor
-            $resolvedPaths[$PackageId] = $currentPath -join " -> "
-            [void]$order.Add($descriptor)
-        }
-        finally {
-            $visiting.Remove($PackageId)
-        }
-    }
-
-    foreach ($packageId in @($DirectDependencies.Keys | Sort-Object)) {
-        Resolve-ProjectPackage `
-            -PackageId $packageId `
-            -RequestedVersion ([string]$DirectDependencies[$packageId])
-    }
-
-    return @($order)
+    return @(Resolve-SELibsDependencyGraph -Registry $Registry -DirectDependencies $DirectDependencies)
 }
-
 function Get-SELibsManagedPackageDrift {
     [CmdletBinding()]
     param(
@@ -2395,63 +2418,42 @@ function Invoke-SELibsAdd {
     }
 
     $manifest = Read-SELibsManifest -Path $manifestPath
-    $directDependencies = ConvertTo-SELibsDependencyMap `
-        -Dependencies $manifest.dependencies
-
-    $requested = ConvertFrom-SELibsPackageSpec `
-        -PackageSpec $PackageSpec
+    $directDependencies = ConvertTo-SELibsDependencyMap -Dependencies $manifest.dependencies
+    $requested = ConvertFrom-SELibsPackageSpec -PackageSpec $PackageSpec
 
     if ($directDependencies.Contains($requested.Id)) {
-        throw (
-            "Package '$($requested.Id)' is already a direct dependency. " +
-            "Use update to change its version."
-        )
+        throw "Package '$($requested.Id)' is already a direct dependency. Use update to change its version."
     }
 
     $directDependencies[$requested.Id] = $requested.Version
-
     $existingLock = $null
 
     if (Test-Path -LiteralPath $lockPath -PathType Leaf) {
         $existingLock = Read-SELibsLock -Path $lockPath
     }
     elseif ($directDependencies.Count -gt 1) {
-        throw (
-            "The manifest contains dependencies but selibs.lock.json " +
-            "is missing."
-        )
+        throw "The manifest contains dependencies but selibs.lock.json is missing."
     }
 
-    $resolvedLibraries = Resolve-SELibsLibrariesPath `
-        -ModRoot $root `
-        -LibrariesPath ([string]$manifest.librariesPath)
-
+    $resolvedLibraries = Resolve-SELibsLibrariesPath -ModRoot $root -LibrariesPath ([string]$manifest.librariesPath)
     $registry = Read-SELibsRegistry -RegistryUrl $RegistryUrl
-    $descriptors = @(
-        Resolve-SELibsProjectGraph `
-            -Registry $registry `
-            -DirectDependencies $directDependencies
-    )
+    $descriptors = @(Resolve-SELibsProjectGraph -Registry $registry -DirectDependencies $directDependencies)
 
     Test-SELibsFolderClaims -Descriptors $descriptors
 
     $descriptorById = @{}
-
     foreach ($descriptor in $descriptors) {
         $descriptorById[$descriptor.Id] = $descriptor
     }
 
     $rootDescriptor = $descriptorById[$requested.Id]
-
     if ($null -eq $rootDescriptor) {
         throw "Resolved graph did not contain '$($requested.Id)'."
     }
 
     $finalDirectDependencies = [ordered]@{}
-
     foreach ($directId in @($directDependencies.Keys | Sort-Object)) {
         $descriptor = $descriptorById[$directId]
-
         if ($null -eq $descriptor) {
             throw "Resolved graph did not contain direct package '$directId'."
         }
@@ -2460,26 +2462,55 @@ function Invoke-SELibsAdd {
     }
 
     $existingPackageProperties = @{}
-
     if ($null -ne $existingLock) {
         foreach ($property in $existingLock.packages.PSObject.Properties) {
             $existingPackageProperties[$property.Name] = $property
+        }
+    }
 
+    $changedIds = @{}
+    foreach ($descriptor in $descriptors) {
+        $existingProperty = $null
+        if ($existingPackageProperties.ContainsKey($descriptor.Id)) {
+            $existingProperty = $existingPackageProperties[$descriptor.Id]
+        }
+
+        if ($null -eq $existingProperty -or [string]$existingProperty.Value.version -ne $descriptor.Version) {
+            $changedIds[$descriptor.Id] = $true
+        }
+    }
+
+    $removedProperties = New-Object System.Collections.ArrayList
+    if ($null -ne $existingLock) {
+        foreach ($property in $existingLock.packages.PSObject.Properties) {
             if (-not $descriptorById.ContainsKey($property.Name)) {
-                throw (
-                    "The lock contains unreachable package " +
-                    "'$($property.Name)'. Run remove or restore first."
-                )
+                [void]$removedProperties.Add($property)
+            }
+        }
+    }
+
+    if ($null -ne $existingLock) {
+        foreach ($property in $existingLock.packages.PSObject.Properties) {
+            Test-SELibsManagedPackage -LibrariesRoot $resolvedLibraries.FullPath -PackageId $property.Name -LockEntry $property.Value
+        }
+    }
+
+    $replaceableFolders = @{}
+    if ($null -ne $existingLock) {
+        foreach ($property in $existingLock.packages.PSObject.Properties) {
+            if ($changedIds.ContainsKey($property.Name) -or -not $descriptorById.ContainsKey($property.Name)) {
+                foreach ($folderValue in @($property.Value.folders)) {
+                    $replaceableFolders[[string]$folderValue] = $true
+                }
             }
         }
     }
 
     New-Item -ItemType Directory -Path $statePath -Force | Out-Null
-
-    $transactionRoot = Join-Path `
-        $statePath `
-        ("tmp\add-" + [Guid]::NewGuid().ToString("N"))
-
+    $transactionRoot = Join-Path $statePath ("tmp\add-" + [Guid]::NewGuid().ToString("N"))
+    $backupLibraries = Join-Path $transactionRoot "backup\Libraries"
+    $stagedPackages = @{}
+    $movedFolders = New-Object System.Collections.ArrayList
     $createdTargets = New-Object System.Collections.ArrayList
     $oldManifestContent = Get-Content -LiteralPath $manifestPath -Raw
     $oldLockContent = $null
@@ -2489,67 +2520,23 @@ function Invoke-SELibsAdd {
     }
 
     try {
-        $lockEntries = [ordered]@{}
-        $stagedPackages = @{}
-
         foreach ($descriptor in $descriptors) {
-            $existingProperty = $null
-
-            if ($existingPackageProperties.ContainsKey($descriptor.Id)) {
-                $existingProperty = $existingPackageProperties[$descriptor.Id]
-            }
-
-            if ($null -ne $existingProperty) {
-                $existingEntry = $existingProperty.Value
-
-                if ([string]$existingEntry.version -ne $descriptor.Version) {
-                    throw (
-                        "Installed package '$($descriptor.Id)' is locked at " +
-                        "'$($existingEntry.version)' but resolution selected " +
-                        "'$($descriptor.Version)'."
-                    )
-                }
-
-                Test-SELibsManagedPackage `
-                    -LibrariesRoot $resolvedLibraries.FullPath `
-                    -PackageId $descriptor.Id `
-                    -LockEntry $existingEntry
-
-                $lockEntries[$descriptor.Id] = New-SELibsLockEntry `
-                    -Descriptor $descriptor `
-                    -Direct:$finalDirectDependencies.Contains($descriptor.Id) `
-                    -Files (Get-SELibsFolderFiles `
-                        -LibrariesRoot $resolvedLibraries.FullPath `
-                        -Folders $descriptor.Folders)
-
+            if (-not $changedIds.ContainsKey($descriptor.Id)) {
                 continue
             }
 
-            $packageRoot = Join-Path $transactionRoot $descriptor.Id
+            $packageRoot = Join-Path $transactionRoot ("packages\" + $descriptor.Id)
             $archivePath = Join-Path $packageRoot "component.zip"
             $extractPath = Join-Path $packageRoot "extract"
 
-            Copy-SELibsResource `
-                -Source $descriptor.ComponentSource `
-                -Destination $archivePath
-
-            $actualHash = (
-                Get-FileHash `
-                    -LiteralPath $archivePath `
-                    -Algorithm SHA256
-            ).Hash.ToLowerInvariant()
+            Copy-SELibsResource -Source $descriptor.ComponentSource -Destination $archivePath
+            $actualHash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
 
             if ($actualHash -ne $descriptor.ComponentSha256) {
-                throw (
-                    "Component checksum mismatch for " +
-                    "'$($descriptor.Id)@$($descriptor.Version)'."
-                )
+                throw "Component checksum mismatch for '$($descriptor.Id)@$($descriptor.Version)'."
             }
 
-            Expand-SELibsComponentArchive `
-                -ArchivePath $archivePath `
-                -Destination $extractPath
-
+            Expand-SELibsComponentArchive -ArchivePath $archivePath -Destination $extractPath
             $extractedLibraries = Join-Path $extractPath "Libraries"
 
             foreach ($folderValue in $descriptor.Folders) {
@@ -2558,55 +2545,64 @@ function Invoke-SELibsAdd {
                 $targetFolder = Join-Path $resolvedLibraries.FullPath $folder
 
                 if (-not (Test-Path -LiteralPath $sourceFolder -PathType Container)) {
-                    throw (
-                        "Package '$($descriptor.Id)' does not contain " +
-                        "declared folder '$folder'."
-                    )
+                    throw "Package '$($descriptor.Id)' does not contain declared folder '$folder'."
                 }
 
-                if (Test-Path -LiteralPath $targetFolder) {
-                    throw (
-                        "Refusing to overwrite existing Libraries folder " +
-                        "'$folder'."
-                    )
+                if ((Test-Path -LiteralPath $targetFolder) -and -not $replaceableFolders.ContainsKey($folder)) {
+                    throw "Refusing to overwrite existing Libraries folder '$folder'."
                 }
             }
 
             $stagedPackages[$descriptor.Id] = $extractedLibraries
-
-            $lockEntries[$descriptor.Id] = New-SELibsLockEntry `
-                -Descriptor $descriptor `
-                -Direct:$finalDirectDependencies.Contains($descriptor.Id) `
-                -Files (Get-SELibsFolderFiles `
-                    -LibrariesRoot $extractedLibraries `
-                    -Folders $descriptor.Folders)
         }
 
-        New-Item `
-            -ItemType Directory `
-            -Path $resolvedLibraries.FullPath `
-            -Force |
-            Out-Null
+        New-Item -ItemType Directory -Path $resolvedLibraries.FullPath -Force | Out-Null
+
+        if ($null -ne $existingLock) {
+            foreach ($property in $existingLock.packages.PSObject.Properties) {
+                if (-not $changedIds.ContainsKey($property.Name) -and $descriptorById.ContainsKey($property.Name)) {
+                    continue
+                }
+
+                foreach ($folderValue in @($property.Value.folders)) {
+                    $folder = [string]$folderValue
+                    $source = Join-Path $resolvedLibraries.FullPath $folder
+                    $destination = Join-Path $backupLibraries $folder
+                    $destinationParent = Split-Path -Parent $destination
+
+                    New-Item -ItemType Directory -Path $destinationParent -Force | Out-Null
+                    Move-Item -LiteralPath $source -Destination $destination
+
+                    [void]$movedFolders.Add([pscustomobject]@{
+                        Source = $destination
+                        Destination = $source
+                    })
+                }
+            }
+        }
 
         foreach ($descriptor in $descriptors) {
-            if (-not $stagedPackages.ContainsKey($descriptor.Id)) {
+            if (-not $changedIds.ContainsKey($descriptor.Id)) {
                 continue
             }
 
             $stagedLibraries = $stagedPackages[$descriptor.Id]
-
             foreach ($folderValue in $descriptor.Folders) {
                 $folder = [string]$folderValue
-                $sourceFolder = Join-Path $stagedLibraries $folder
-                $targetFolder = Join-Path $resolvedLibraries.FullPath $folder
+                $source = Join-Path $stagedLibraries $folder
+                $target = Join-Path $resolvedLibraries.FullPath $folder
 
-                Copy-Item `
-                    -LiteralPath $sourceFolder `
-                    -Destination $targetFolder `
-                    -Recurse
-
-                [void]$createdTargets.Add($targetFolder)
+                [void]$createdTargets.Add($target)
+                Copy-Item -LiteralPath $source -Destination $target -Recurse
             }
+        }
+
+        $lockEntries = [ordered]@{}
+        foreach ($descriptor in $descriptors) {
+            $lockEntries[$descriptor.Id] = New-SELibsLockEntry `
+                -Descriptor $descriptor `
+                -Direct:$finalDirectDependencies.Contains($descriptor.Id) `
+                -Files (Get-SELibsFolderFiles -LibrariesRoot $resolvedLibraries.FullPath -Folders $descriptor.Folders)
         }
 
         $newManifest = [ordered]@{
@@ -2626,31 +2622,33 @@ function Invoke-SELibsAdd {
             Write-SELibsJsonAtomic -Path $manifestPath -Value $newManifest
         }
         catch {
-            Restore-SELibsProjectFile `
-                -Path $manifestPath `
-                -OriginalContent $oldManifestContent
-
-            Restore-SELibsProjectFile `
-                -Path $lockPath `
-                -OriginalContent $oldLockContent
-
+            Restore-SELibsProjectFile -Path $manifestPath -OriginalContent $oldManifestContent
+            Restore-SELibsProjectFile -Path $lockPath -OriginalContent $oldLockContent
             throw
         }
 
-        Write-Output (
-            "Added $($rootDescriptor.Id) $($rootDescriptor.Version)."
-        )
+        Write-Output "Added $($rootDescriptor.Id) $($rootDescriptor.Version)."
 
         foreach ($descriptor in $descriptors) {
-            if (
-                $descriptor.Id -ne $rootDescriptor.Id -and
-                -not $existingPackageProperties.ContainsKey($descriptor.Id)
-            ) {
-                Write-Output (
-                    "Installed dependency " +
-                    "$($descriptor.Id) $($descriptor.Version)."
-                )
+            if ($descriptor.Id -eq $rootDescriptor.Id) {
+                continue
             }
+
+            $existingProperty = $null
+            if ($existingPackageProperties.ContainsKey($descriptor.Id)) {
+                $existingProperty = $existingPackageProperties[$descriptor.Id]
+            }
+
+            if ($null -eq $existingProperty) {
+                Write-Output "Installed dependency $($descriptor.Id) $($descriptor.Version)."
+            }
+            elseif ([string]$existingProperty.Value.version -ne $descriptor.Version) {
+                Write-Output "Updated dependency $($descriptor.Id) $($existingProperty.Value.version) -> $($descriptor.Version)."
+            }
+        }
+
+        foreach ($property in $removedProperties) {
+            Write-Output "Removed unused dependency $($property.Name) $($property.Value.version)."
         }
 
         Write-Output "Libraries: $($resolvedLibraries.RelativePath)"
@@ -2663,26 +2661,25 @@ function Invoke-SELibsAdd {
             }
         }
 
-        Restore-SELibsProjectFile `
-            -Path $manifestPath `
-            -OriginalContent $oldManifestContent
+        for ($index = $movedFolders.Count - 1; $index -ge 0; $index--) {
+            $moved = $movedFolders[$index]
+            if (Test-Path -LiteralPath $moved.Source) {
+                $parent = Split-Path -Parent $moved.Destination
+                New-Item -ItemType Directory -Path $parent -Force | Out-Null
+                Move-Item -LiteralPath $moved.Source -Destination $moved.Destination
+            }
+        }
 
-        Restore-SELibsProjectFile `
-            -Path $lockPath `
-            -OriginalContent $oldLockContent
-
+        Restore-SELibsProjectFile -Path $manifestPath -OriginalContent $oldManifestContent
+        Restore-SELibsProjectFile -Path $lockPath -OriginalContent $oldLockContent
         throw
     }
     finally {
         if (Test-Path -LiteralPath $transactionRoot) {
-            Remove-Item `
-                -LiteralPath $transactionRoot `
-                -Recurse `
-                -Force
+            Remove-Item -LiteralPath $transactionRoot -Recurse -Force
         }
 
-        Remove-SELibsEmptyTransactionParent `
-            -TransactionRoot $transactionRoot
+        Remove-SELibsEmptyTransactionParent -TransactionRoot $transactionRoot
     }
 }
 
