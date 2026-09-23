@@ -276,6 +276,53 @@ finally {
         -Value $originalGitHubApi
 }
 
+$script:ReleaseAssetApiUris = New-Object System.Collections.ArrayList
+
+try {
+    Set-Item -Path Function:\Invoke-SELibsGitHubApi -Value {
+        param([Parameter(Mandatory = $true)][string]$Uri)
+
+        [void]$script:ReleaseAssetApiUris.Add($Uri)
+
+        if ($Uri -eq "https://api.github.com/repos/owner/repository/releases/tags/test%2Fv2.0.0") {
+            return [pscustomobject]@{
+                tag_name = "test/v2.0.0"
+                draft = $false
+                prerelease = $false
+                assets = @()
+                assets_url = "https://api.github.com/repos/owner/repository/releases/42/assets"
+            }
+        }
+
+        if ($Uri -eq "https://api.github.com/repos/owner/repository/releases/42/assets") {
+            return ,@(
+                [pscustomobject]@{
+                    name = "Test.Package-2.0.0-package.json"
+                    browser_download_url = "https://example/authoritative-2.0.0.json"
+                }
+                [pscustomobject]@{
+                    name = "Test.Package-2.0.0-component.zip"
+                    browser_download_url = "https://example/authoritative-2.0.0.zip"
+                }
+            )
+        }
+
+        throw "Unexpected GitHub asset-resolution URI '$Uri'."
+    }
+
+    $assetRelease = Get-SELibsGitHubRelease -PackageId "Test.Package" -Route ([pscustomobject]@{
+        repository = "owner/repository"
+        releasePrefix = "test/v"
+    }) -RequestedVersion "2.0.0"
+
+    Assert-Equal -Expected "https://example/authoritative-2.0.0.json" -Actual ([string]$assetRelease.ManifestSource) -Message "Exact-version resolution did not use the authoritative release asset endpoint."
+    Assert-Equal -Expected "https://example/authoritative-2.0.0.zip" -Actual (Get-SELibsComponentSource -Release $assetRelease -AssetName "Test.Package-2.0.0-component.zip") -Message "Exact-version resolution did not retain authoritative component assets."
+    Assert-Equal -Expected 2 -Actual $script:ReleaseAssetApiUris.Count -Message "Exact-version resolution made an unexpected number of GitHub API requests."
+}
+finally {
+    Set-Item -Path Function:\Invoke-SELibsGitHubApi -Value $originalGitHubApi
+}
+
 function New-TestPackageRelease {
     param(
         [Parameter(Mandatory = $true)]
@@ -447,10 +494,11 @@ try {
                     })
 
                     [void]$page.Add([pscustomobject]@{
-                        tag_name = "release/Test.NoManifest/1.0.0"
+                        tag_name = "release/Test.StaleAssets/1.0.0"
                         draft = $false
                         prerelease = $false
                         assets = @()
+                        assets_url = "https://api.github.com/repos/owner/discovery/releases/1001/assets"
                     })
 
                     for ($index = 0; $index -lt 95; $index++) {
@@ -463,6 +511,15 @@ try {
                     }
 
                     return ,@($page)
+                }
+
+                if ($Uri -eq "https://api.github.com/repos/owner/discovery/releases/1001/assets") {
+                    return ,@(
+                        [pscustomobject]@{
+                            name = "Test.StaleAssets-1.0.0-package.json"
+                            browser_download_url = "https://example/Test.StaleAssets-1.0.0.json"
+                        }
+                    )
                 }
 
                 if ($Uri -eq "https://api.github.com/repos/owner/discovery/releases?per_page=100&page=2") {
@@ -525,7 +582,7 @@ try {
             -Message "Repository registry did not preserve schema version 2."
 
         Assert-Equal `
-            -Expected 3 `
+            -Expected 4 `
             -Actual @(
                 $discoveredRegistry.Value.packages.PSObject.Properties
             ).Count `
@@ -559,6 +616,9 @@ try {
             -Actual ([string]$pageTwoRoute.repository) `
             -Message "Repository discovery did not read the second release page."
 
+        $staleAssetRoute = Get-SELibsPackageRoute -Registry $discoveredRegistry -PackageId "Test.StaleAssets"
+        Assert-Equal -Expected "owner/discovery" -Actual ([string]$staleAssetRoute.repository) -Message "Repository discovery did not recover a package through the authoritative release asset endpoint."
+
         $latestOne = Get-SELibsGitHubRelease `
             -PackageId "Test.One" `
             -Route $oneRoute
@@ -574,9 +634,9 @@ try {
             -Message "Cached discovery releases selected the wrong manifest."
 
         Assert-Equal `
-            -Expected 2 `
+            -Expected 3 `
             -Actual $script:DiscoveryApiUris.Count `
-            -Message "Latest resolution queried a repository already cached by discovery."
+            -Message "Latest resolution made unexpected GitHub API requests after repository discovery."
 
         $collisionRegistryPath = Join-Path $testRoot "registry-v2-collision.json"
 
