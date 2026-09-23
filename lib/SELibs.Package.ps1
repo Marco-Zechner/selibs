@@ -227,6 +227,40 @@ function Get-SELibsGitHubRepositoryReleases {
     return @($releases)
 }
 
+function Get-SELibsGitHubReleaseAssets {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Release,
+
+        [string]$ExpectedAssetName
+    )
+
+    $assetsProperty = $Release.PSObject.Properties["assets"]
+    $assets = @()
+
+    if ($null -ne $assetsProperty) {
+        $assets = @($assetsProperty.Value | ForEach-Object { $_ })
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedAssetName)) {
+        $matches = @($assets | Where-Object { $_.name -eq $ExpectedAssetName })
+        if ($matches.Count -eq 1) { return $assets }
+    }
+    elseif ($assets.Count -gt 0) {
+        return $assets
+    }
+
+    $assetsUrlProperty = $Release.PSObject.Properties["assets_url"]
+    if ($null -eq $assetsUrlProperty) { return $assets }
+
+    $assetsUrl = [string]$assetsUrlProperty.Value
+    if ([string]::IsNullOrWhiteSpace($assetsUrl)) { return $assets }
+
+    $response = Invoke-SELibsGitHubApi -Uri $assetsUrl
+    return @($response | ForEach-Object { $_ })
+}
+
 function ConvertFrom-SELibsPackageReleaseTag {
     [CmdletBinding()]
     param(
@@ -293,10 +327,8 @@ function Get-SELibsGitHubDiscoveredRoutes {
         }
 
         $manifestName = "$($tagInfo.PackageId)-$($tagInfo.Version)-package.json"
-        $manifestAssets = @(
-            $release.assets |
-                Where-Object { $_.name -eq $manifestName }
-        )
+        $assets = @(Get-SELibsGitHubReleaseAssets -Release $release -ExpectedAssetName $manifestName)
+        $manifestAssets = @($assets | Where-Object { $_.name -eq $manifestName })
 
         if ($manifestAssets.Count -ne 1) {
             continue
@@ -853,10 +885,8 @@ function Get-SELibsGitHubRelease {
     }
 
     $manifestName = "$PackageId-$version-package.json"
-    $manifestAssets = @(
-        $release.assets |
-            Where-Object { $_.name -eq $manifestName }
-    )
+    $assets = @(Get-SELibsGitHubReleaseAssets -Release $release -ExpectedAssetName $manifestName)
+    $manifestAssets = @($assets | Where-Object { $_.name -eq $manifestName })
 
     if ($manifestAssets.Count -ne 1) {
         throw (
@@ -870,7 +900,7 @@ function Get-SELibsGitHubRelease {
         Version = $version
         ManifestSource = [string]$manifestAssets[0].browser_download_url
         AssetRoot = $null
-        Assets = @($release.assets)
+        Assets = @($assets)
     }
 }
 
